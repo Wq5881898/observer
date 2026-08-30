@@ -101,6 +101,7 @@ def run_guided_calibration(
         environment = current_environment(config, first.frame.shape)
         probe = MediapipeVisionProbe(models, config.inference)
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        _await_calibration_ready(camera, window)
 
         _run_preview_phase(
             camera,
@@ -257,6 +258,25 @@ def _wait_for_frame(camera: CameraWorker, timeout_seconds: float):
             return snapshot
         time.sleep(0.01)
     raise RuntimeError("camera opened but did not produce a frame")
+
+
+def _await_calibration_ready(camera: CameraWorker, window: str) -> None:
+    import cv2
+
+    last_sequence = 0
+    while True:
+        snapshot = camera.buffer.latest(after_sequence=last_sequence)
+        if snapshot is None:
+            _check_cancel(cv2.waitKey(10))
+            continue
+        last_sequence = snapshot.sequence
+        preview = cv2.flip(snapshot.frame, 1)
+        _put_text(preview, "Sit normally; SPACE starts calibration, ESC cancels")
+        cv2.imshow(window, preview)
+        key = cv2.waitKey(1)
+        _check_cancel(key)
+        if key & 0xFF == 32:
+            return
 
 
 def _run_preview_phase(

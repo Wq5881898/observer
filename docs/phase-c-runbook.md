@@ -32,7 +32,7 @@
 .\.venv\Scripts\python.exe -m observer profile-check data/calibration/default.json
 ```
 
-校准约需 1–2 分钟。前半段保持可持续的中立坐姿，后半段依次注视 9 个拟合点和 8 个未参与拟合的边缘验证点；边缘归一化 RMSE 必须不高于 0.18，否则档案不保存。按 `Esc` 可安全取消。成功后产生：
+校准约需 1–2 分钟。窗口先显示镜像预览，坐好并确认脸、双眼和双肩入镜后按空格开始。前半段保持可持续的中立坐姿，后半段依次注视 9 个拟合点和 8 个未参与拟合的边缘验证点；边缘归一化 RMSE 必须不高于 0.18，否则档案不保存。按 `Esc` 可安全取消。成功后产生：
 
 - `data/calibration/default.json`：版本化档案、环境指纹、姿势稳健统计和注意力回归系数；
 - `data/calibration/default.samples.json`：用于判断复杂设计是否必要的派生数值；不含帧或完整 landmarks。
