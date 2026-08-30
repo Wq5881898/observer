@@ -12,7 +12,7 @@ from typing import Sequence
 
 from observer.camera import CameraWorker
 from observer.config import load_config
-from observer.models import verify_model_directory
+from observer.models import sha256_file, verify_model_directory
 from observer.resources import ResourceSampler, summarize_resources
 
 
@@ -81,7 +81,12 @@ def _camera_smoke(config_path: Path | None, seconds: float) -> int:
     return 0 if camera.stats.frames_captured > 0 and camera.stats.last_error is None else 2
 
 
-def _vision_smoke(config_path: Path | None, models_dir: Path, seconds: float) -> int:
+def _vision_smoke(
+    config_path: Path | None,
+    models_dir: Path,
+    seconds: float,
+    profile_path: Path | None = None,
+) -> int:
     if seconds <= 0:
         raise ValueError("seconds must be positive")
     from observer.vision import MediapipeVisionProbe
@@ -98,7 +103,21 @@ def _vision_smoke(config_path: Path | None, models_dir: Path, seconds: float) ->
         if not camera.start():
             print(json.dumps({"camera": asdict(camera.stats)}, indent=2, ensure_ascii=False))
             return 2
-        probe = MediapipeVisionProbe(models, config.inference)
+        profile = None
+        if profile_path is not None:
+            from observer.calibration import load_profile
+            from observer.calibration_workflow import current_environment
+
+            first_snapshot = camera.buffer.latest()
+            deadline = time.monotonic() + 5.0
+            while first_snapshot is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+                first_snapshot = camera.buffer.latest()
+            if first_snapshot is None:
+                raise RuntimeError("camera opened but did not produce a frame")
+            environment = current_environment(config, first_snapshot.frame.shape)
+            profile = load_profile(profile_path, environment)
+        probe = MediapipeVisionProbe(models, config.inference, profile)
         sampler = ResourceSampler()
         started = time.monotonic()
         next_resource_sample = started
@@ -137,6 +156,110 @@ def _vision_smoke(config_path: Path | None, models_dir: Path, seconds: float) ->
     return 0 if runs.face.runs and runs.pose.runs and runs.object.runs else 4
 
 
+def _calibrate(config_path: Path | None, models_dir: Path, output_path: Path) -> int:
+    from observer.calibration_workflow import run_guided_calibration
+
+    config = load_config(config_path)
+    models = verify_model_directory(models_dir)
+    profile = run_guided_calibration(config, models, output_path)
+    result = {
+        "profile_path": str(output_path.resolve()),
+        "profile_id": profile.profile_id,
+        "schema_version": profile.schema_version,
+        "posture_valid_samples": profile.posture.valid_sample_count,
+        "posture_coverage": profile.posture.coverage,
+        "attention_valid_samples": profile.attention.valid_sample_count,
+        "attention_coverage": profile.attention.coverage,
+        "attention_training_rmse": profile.attention.training_rmse,
+        "attention_validation_rmse": profile.attention.validation_rmse,
+    }
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _profile_check(profile_path: Path) -> int:
+    from observer.calibration import load_profile
+
+    profile = load_profile(profile_path)
+    result = {
+        "valid": True,
+        "path": str(profile_path.resolve()),
+        "sha256": sha256_file(profile_path),
+        "profile_id": profile.profile_id,
+        "schema_version": profile.schema_version,
+        "feature_version": profile.posture.feature_version,
+        "environment": asdict(profile.environment),
+        "posture_coverage": profile.posture.coverage,
+        "attention_coverage": profile.attention.coverage,
+        "attention_validation_rmse": profile.attention.validation_rmse,
+    }
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _validation_report(trials_path: Path, output_path: Path) -> int:
+    from observer.validation import read_trials, write_metrics_report
+
+    records = read_trials(trials_path)
+    report = write_metrics_report(records, output_path)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _validation_scenarios() -> int:
+    from observer.live_validation import scenario_catalog
+
+    print(json.dumps(scenario_catalog(), indent=2, ensure_ascii=False))
+    return 0
+
+
+def _validate_live(
+    config_path: Path | None,
+    models_dir: Path,
+    profile_path: Path,
+    dataset_role: str,
+    signals: str,
+    output_root: Path,
+    repetitions: int | None,
+    save_error_evidence: bool,
+) -> int:
+    from observer.live_validation import run_live_validation
+
+    config = load_config(config_path)
+    models = verify_model_directory(models_dir)
+    signal_names = tuple(name.strip() for name in signals.split(",") if name.strip())
+    batch_directory = run_live_validation(
+        config,
+        models,
+        profile_path,
+        dataset_role=dataset_role,
+        signal_names=signal_names,
+        output_root=output_root,
+        repetitions_override=repetitions,
+        save_error_evidence=save_error_evidence,
+    )
+    print(
+        json.dumps(
+            {
+                "batch_directory": str(batch_directory.resolve()),
+                "report": str((batch_directory / "report.json").resolve()),
+                "evidence_enabled": save_error_evidence,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _evidence_purge(index_path: Path, apply: bool) -> int:
+    from observer.validation import purge_expired_evidence
+
+    report = purge_expired_evidence(index_path, apply=apply)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="observer")
     parser.add_argument("--config", type=Path, help="optional JSON configuration path")
@@ -151,6 +274,55 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vision_parser.add_argument("--seconds", type=float, default=30.0)
     vision_parser.add_argument("--models-dir", type=Path, default=Path("models"))
+    vision_parser.add_argument("--profile", type=Path)
+    calibrate_parser = subparsers.add_parser(
+        "calibrate", help="run guided posture and 9-point attention calibration"
+    )
+    calibrate_parser.add_argument("--models-dir", type=Path, default=Path("models"))
+    calibrate_parser.add_argument(
+        "--output", type=Path, default=Path("data/calibration/default.json")
+    )
+    profile_parser = subparsers.add_parser(
+        "profile-check", help="validate a calibration profile without opening the camera"
+    )
+    profile_parser.add_argument("profile", type=Path)
+    report_parser = subparsers.add_parser(
+        "validation-report", help="summarize a Stage C trials JSONL file"
+    )
+    report_parser.add_argument("trials", type=Path)
+    report_parser.add_argument("--output", type=Path, default=Path("data/validation/report.json"))
+    subparsers.add_parser(
+        "validation-scenarios", help="list built-in Stage C real validation scenarios"
+    )
+    live_parser = subparsers.add_parser(
+        "validate-live", help="run a new isolated tuning or holdout camera batch"
+    )
+    live_parser.add_argument("--profile", type=Path, required=True)
+    live_parser.add_argument("--models-dir", type=Path, default=Path("models"))
+    live_parser.add_argument("--role", choices=("tuning", "holdout"), required=True)
+    live_parser.add_argument(
+        "--signals",
+        required=True,
+        help="comma-separated: away,phone_held,posture_deviation,attention_away",
+    )
+    live_parser.add_argument("--output-root", type=Path, default=Path("data/validation"))
+    live_parser.add_argument(
+        "--repetitions", type=int, help="override only for dry runs; omit for protocol counts"
+    )
+    live_parser.set_defaults(save_error_evidence=True)
+    live_parser.add_argument(
+        "--no-error-evidence",
+        action="store_false",
+        dest="save_error_evidence",
+        help="disable the approved one-error-frame validation policy",
+    )
+    purge_parser = subparsers.add_parser(
+        "evidence-purge", help="dry-run or delete expired Stage C error evidence"
+    )
+    purge_parser.add_argument("index", type=Path)
+    purge_parser.add_argument(
+        "--apply", action="store_true", help="delete listed expired image files"
+    )
     return parser
 
 
@@ -161,5 +333,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "camera-smoke":
         return _camera_smoke(args.config, args.seconds)
     if args.command == "vision-smoke":
-        return _vision_smoke(args.config, args.models_dir, args.seconds)
+        return _vision_smoke(args.config, args.models_dir, args.seconds, args.profile)
+    if args.command == "calibrate":
+        return _calibrate(args.config, args.models_dir, args.output)
+    if args.command == "profile-check":
+        return _profile_check(args.profile)
+    if args.command == "validation-report":
+        return _validation_report(args.trials, args.output)
+    if args.command == "validation-scenarios":
+        return _validation_scenarios()
+    if args.command == "validate-live":
+        return _validate_live(
+            args.config,
+            args.models_dir,
+            args.profile,
+            args.role,
+            args.signals,
+            args.output_root,
+            args.repetitions,
+            args.save_error_evidence,
+        )
+    if args.command == "evidence-purge":
+        return _evidence_purge(args.index, args.apply)
     raise AssertionError(f"unknown command: {args.command}")

@@ -6,6 +6,7 @@ from observer.observations import (
     NormalizedPoint,
     PhoneCandidate,
     SignalState,
+    SignalValue,
 )
 
 
@@ -47,6 +48,44 @@ class ObservationFusionTests(unittest.TestCase):
         )
         signal = fusion.build(10.1).signal("phone_held")
         self.assertIs(signal.state, SignalState.UNKNOWN)
+
+    def test_no_phone_requires_at_least_one_observable_wrist(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_pose(10.0, 1, (NormalizedPoint(0.5, 0.7, 0.9),))
+        fusion.update_phones(10.0, ())
+        self.assertIs(
+            fusion.build(10.1).signal("phone_held").state, SignalState.COMPLIANT
+        )
+
+    def test_no_phone_and_no_observable_hands_is_unknown(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_pose(10.0, 1, (NormalizedPoint(0.5, 0.7, 0.2),))
+        fusion.update_phones(10.0, ())
+        self.assertIs(fusion.build(10.1).signal("phone_held").state, SignalState.UNKNOWN)
+
+    def test_calibrated_signals_flow_through_when_fresh(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_quality(10.0, True, None)
+        fusion.update_attention(10.0, SignalValue.compliant(confidence=0.9))
+        fusion.update_posture(10.0, SignalValue.violation(confidence=0.8))
+        observation = fusion.build(10.1)
+        self.assertIs(observation.signal("attention_away").state, SignalState.COMPLIANT)
+        self.assertIs(observation.signal("posture_deviation").state, SignalState.VIOLATION)
+
+    def test_failed_quality_gate_suppresses_violations(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_quality(10.0, False, "frame too dark")
+        fusion.update_face(10.0, 0)
+        fusion.update_pose(10.0, 0, ())
+        fusion.update_attention(10.0, SignalValue.violation(confidence=1.0))
+        fusion.update_posture(10.0, SignalValue.violation(confidence=1.0))
+        observation = fusion.build(10.1)
+        self.assertTrue(
+            all(
+                observation.signal(name).state is SignalState.UNKNOWN
+                for name in ("away", "attention_away", "posture_deviation")
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -13,9 +13,12 @@ from observer.observations import (
 
 @dataclass(frozen=True, slots=True)
 class SignalFreshness:
+    quality_seconds: float = 0.75
     face_seconds: float = 0.75
     pose_seconds: float = 1.0
     object_seconds: float = 2.0
+    attention_seconds: float = 0.75
+    posture_seconds: float = 1.0
 
 
 class ObservationFusion:
@@ -23,6 +26,9 @@ class ObservationFusion:
 
     def __init__(self, freshness: SignalFreshness | None = None) -> None:
         self.freshness = freshness or SignalFreshness()
+        self._quality_at: float | None = None
+        self._quality_observable = False
+        self._quality_reason = "frame quality is not available"
         self._face_at: float | None = None
         self._face_count = 0
         self._pose_at: float | None = None
@@ -30,6 +36,15 @@ class ObservationFusion:
         self._wrists: tuple[NormalizedPoint, ...] = ()
         self._object_at: float | None = None
         self._phones: tuple[PhoneCandidate, ...] = ()
+        self._attention_at: float | None = None
+        self._attention = SignalValue.unknown("attention calibration not available")
+        self._posture_at: float | None = None
+        self._posture = SignalValue.unknown("posture calibration not available")
+
+    def update_quality(self, at_monotonic: float, observable: bool, reason: str | None) -> None:
+        self._quality_at = at_monotonic
+        self._quality_observable = observable
+        self._quality_reason = reason or "frame quality gate rejected the observation"
 
     def update_face(self, at_monotonic: float, face_count: int) -> None:
         self._face_at = at_monotonic
@@ -51,40 +66,81 @@ class ObservationFusion:
         self._object_at = at_monotonic
         self._phones = phones
 
+    def update_attention(self, at_monotonic: float, signal: SignalValue) -> None:
+        self._attention_at = at_monotonic
+        self._attention = signal
+
+    def update_posture(self, at_monotonic: float, signal: SignalValue) -> None:
+        self._posture_at = at_monotonic
+        self._posture = signal
+
     def build(self, now_monotonic: float) -> Observation:
+        quality_fresh = self._is_fresh(
+            self._quality_at, now_monotonic, self.freshness.quality_seconds
+        )
         face_fresh = self._is_fresh(self._face_at, now_monotonic, self.freshness.face_seconds)
         pose_fresh = self._is_fresh(self._pose_at, now_monotonic, self.freshness.pose_seconds)
         object_fresh = self._is_fresh(
             self._object_at, now_monotonic, self.freshness.object_seconds
         )
+        attention_fresh = self._is_fresh(
+            self._attention_at, now_monotonic, self.freshness.attention_seconds
+        )
+        posture_fresh = self._is_fresh(
+            self._posture_at, now_monotonic, self.freshness.posture_seconds
+        )
 
-        if (face_fresh and self._face_count > 0) or (pose_fresh and self._pose_count > 0):
+        if quality_fresh and not self._quality_observable:
+            away = SignalValue.unknown(self._quality_reason)
+        elif (face_fresh and self._face_count > 0) or (pose_fresh and self._pose_count > 0):
             away = SignalValue.compliant(confidence=1.0)
         elif face_fresh and pose_fresh:
             away = SignalValue.violation(confidence=1.0)
         else:
             away = SignalValue.unknown("face and pose presence are not both fresh")
 
-        if not object_fresh:
+        if quality_fresh and not self._quality_observable:
+            phone_held = SignalValue.unknown(self._quality_reason)
+        elif not object_fresh:
             phone_held = SignalValue.unknown("phone detector result is stale")
         elif not self._phones:
-            phone_held = phone_held_signal((), ())
+            visible_wrists = tuple(wrist for wrist in self._wrists if wrist.visibility >= 0.5)
+            if pose_fresh and self._pose_count > 0 and visible_wrists:
+                phone_held = phone_held_signal((), visible_wrists)
+            else:
+                phone_held = SignalValue.unknown(
+                    "no phone is visible but hands are outside the observable area"
+                )
         elif not pose_fresh:
             phone_held = SignalValue.unknown("phone visible but pose result is stale")
         else:
             phone_held = phone_held_signal(self._phones, self._wrists)
+
+        if quality_fresh and not self._quality_observable:
+            attention = SignalValue.unknown(self._quality_reason)
+            posture = SignalValue.unknown(self._quality_reason)
+        else:
+            attention = (
+                self._attention
+                if attention_fresh
+                else SignalValue.unknown("attention result is stale or calibration unavailable")
+            )
+            posture = (
+                self._posture
+                if posture_fresh
+                else SignalValue.unknown("posture result is stale or calibration unavailable")
+            )
 
         return Observation(
             monotonic_seconds=now_monotonic,
             signals={
                 "away": away,
                 "phone_held": phone_held,
-                "attention_away": SignalValue.unknown("attention calibration not available"),
-                "posture_deviation": SignalValue.unknown("posture calibration not available"),
+                "attention_away": attention,
+                "posture_deviation": posture,
             },
         )
 
     @staticmethod
     def _is_fresh(at: float | None, now: float, maximum_age: float) -> bool:
         return at is not None and 0.0 <= now - at <= maximum_age
-

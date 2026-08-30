@@ -12,11 +12,11 @@ Observer 是一个本地优先的专注与坐姿辅助程序。它使用电脑�
 
 ## 当前状态
 
-项目已完成预研和第一轮设备技术验证。Python 3.11 隔离环境、DirectShow 摄像头最新帧采集、资源预算监控、MediaPipe Face/Pose 和 EfficientDet-Lite0 分频推理已经在目标电脑上运行通过；实测结果见 [第一阶段技术验证记录](docs/phase-1-technical-validation.md)。统一 Observation、手机/手腕几何融合、持续违规状态机、提醒动作和可扩展扣分账本也已完成，见 [第二阶段规则核心记录](docs/phase-2-rule-engine.md)。
+项目已完成预研、技术地基和阶段 C 的可测试实现。Python 3.11 隔离环境、DirectShow 摄像头最新帧采集、资源预算监控、MediaPipe Face/Pose 和 EfficientDet-Lite0 分频推理已经在目标电脑上运行通过；实测结果见 [第一阶段技术验证记录](docs/phase-1-technical-validation.md)。统一 Observation、手机/手腕几何融合、持续违规状态机、提醒动作和可扩展扣分账本也已完成，见 [第二阶段规则核心记录](docs/phase-2-rule-engine.md)。阶段 C 的质量门、个人姿势基线、9 点屏幕注意力校准、环境指纹、手机候选升频/确认、隔离验证批次和指标报告已经实现，当前等待用户参与真实校准、tuning、holdout 与 60 分钟验收，不能提前宣称阶段通过。
 
 技术边界和整体路线见 [可行性研究](docs/feasibility-study.md)，各模块决策见 [完整技术选型对比](docs/technology-selection.md)，当前电脑适配与运行开销要求见 [成熟度、硬件与性能评估](docs/maturity-hardware-performance.md)。
 
-大阶段、门控和当前状态见 [总体阶段计划](docs/master-plan.md)。阶段 C 按 [阶段 C 基准](docs/phase-c-baseline.md)、[校准与验证协议](docs/phase-c-validation-protocol.md) 和 [设计到真实验证交接](docs/phase-c-validation-handoff.md) 实施；真实数据将同时评价准确率和设计是否过度。
+大阶段、门控和当前状态见 [总体阶段计划](docs/master-plan.md)。阶段 C 按 [阶段 C 基准](docs/phase-c-baseline.md)、[校准与验证协议](docs/phase-c-validation-protocol.md)、[真实验证运行手册](docs/phase-c-runbook.md) 和 [设计到真实验证交接](docs/phase-c-validation-handoff.md) 实施；真实数据将同时评价准确率和设计是否过度。
 
 手机检测默认使用 MediaPipe EfficientDet-Lite0 int8。只有它在真实使用场景中达不到手机手持事件验收线时，才评估 YOLO11n ONNX/OpenVINO；正式运行不会同时执行两个物体检测模型。
 
@@ -42,6 +42,10 @@ uv sync --python 3.11
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -m observer camera-smoke --seconds 15
 .\.venv\Scripts\python.exe -m observer vision-smoke --seconds 30
+.\.venv\Scripts\python.exe -m observer calibrate --output data/calibration/default.json
+.\.venv\Scripts\python.exe -m observer validation-scenarios
 ```
 
 `camera-smoke` 和 `vision-smoke` 都不显示预览、不保存图像或视频，只输出取帧、模型延迟和进程资源统计。模型二进制来自 Google MediaPipe 官方存储，来源和 SHA-256 记录在 `models/manifest.json`；二进制本身不提交到版本库。
+
+`calibrate` 会打开临时本地窗口，引导完成中立姿势和 9 点注意力校准。校准档案、派生数值和真实验证批次都写入 Git 已忽略的 `data/`；不保存连续视频或完整 landmarks。验证默认只为误判保存一张本地关键帧，并写入 7 天到期索引；可用 `validate-live --no-error-evidence` 完全关闭。完整命令和数据交接见 [阶段 C 运行手册](docs/phase-c-runbook.md)。
