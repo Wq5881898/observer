@@ -86,6 +86,41 @@ class CalibrationTests(unittest.TestCase):
         self.assertIs(inside.state, SignalState.COMPLIANT)
         self.assertIs(outside.state, SignalState.VIOLATION)
 
+    def test_attention_rejects_face_context_far_outside_calibration(self) -> None:
+        samples = [
+            AttentionSample(
+                FeatureVector(
+                    "attention",
+                    {
+                        "gaze_x": x,
+                        "gaze_y": y,
+                        "face_center_x": 0.5 + index * 0.001,
+                        "face_center_y": 0.5 - index * 0.001,
+                        "face_scale": 0.4 + index * 0.0005,
+                    },
+                ),
+                x,
+                y,
+                point_id,
+            )
+            for index, (point_id, x, y) in enumerate(ATTENTION_POINTS_9)
+        ]
+        calibration = fit_attention_calibration(samples)
+        signal = calibration.evaluate(
+            FeatureVector(
+                "attention",
+                {
+                    "gaze_x": 0.5,
+                    "gaze_y": 0.5,
+                    "face_center_x": 0.8,
+                    "face_center_y": 0.8,
+                    "face_scale": 0.2,
+                },
+            )
+        )
+        self.assertIs(signal.state, SignalState.UNKNOWN)
+        self.assertIn("outside", signal.reason or "")
+
     def test_profile_roundtrip_and_environment_guard(self) -> None:
         posture = fit_posture_calibration(
             [posture_sample(index) for index in range(40)], planned_sample_count=40

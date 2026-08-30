@@ -35,8 +35,8 @@ class SignalValue:
         return cls(SignalState.VIOLATION, confidence=confidence, metrics=metrics)
 
     @classmethod
-    def unknown(cls, reason: str) -> "SignalValue":
-        return cls(SignalState.UNKNOWN, reason=reason)
+    def unknown(cls, reason: str, **metrics: float) -> "SignalValue":
+        return cls(SignalState.UNKNOWN, reason=reason, metrics=metrics)
 
     @classmethod
     def exempt(cls, reason: str) -> "SignalValue":
@@ -134,4 +134,3 @@ def phone_held_signal(
         confidence = min(phone.confidence, wrist.visibility)
         return SignalValue.violation(confidence=confidence, **metrics)
     return SignalValue.compliant(confidence=phone.confidence, **metrics)
-

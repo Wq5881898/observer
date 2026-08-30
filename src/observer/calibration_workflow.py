@@ -36,7 +36,7 @@ class CalibrationCancelled(RuntimeError):
 class CalibrationTimings:
     precheck_seconds: float = 5.0
     posture_settle_seconds: float = 5.0
-    posture_sample_seconds: float = 25.0
+    posture_sample_seconds: float = 30.0
     posture_retest_seconds: float = 10.0
     attention_settle_seconds: float = 1.5
     attention_sample_seconds: float = 2.0
@@ -126,6 +126,12 @@ def run_guided_calibration(
             selected.posture_sample_seconds,
             feature_kind="posture",
         )
+        if len(posture_samples) < 75:
+            raise RuntimeError(
+                "posture calibration collected "
+                f"{len(posture_samples)}/{posture_attempts} valid samples; "
+                "75 are required. Keep both ears and shoulders fully visible."
+            )
         posture = fit_posture_calibration(
             posture_samples,
             planned_sample_count=posture_attempts,
@@ -263,20 +269,34 @@ def _wait_for_frame(camera: CameraWorker, timeout_seconds: float):
 def _await_calibration_ready(camera: CameraWorker, window: str) -> None:
     import cv2
 
+    clicked = False
+
+    def on_mouse(event: int, _x: int, _y: int, _flags: int, _parameter: Any) -> None:
+        nonlocal clicked
+        if event == cv2.EVENT_LBUTTONUP:
+            clicked = True
+
+    cv2.setMouseCallback(window, on_mouse)
+    if hasattr(cv2, "WND_PROP_TOPMOST"):
+        cv2.setWindowProperty(window, cv2.WND_PROP_TOPMOST, 1)
     last_sequence = 0
-    while True:
-        snapshot = camera.buffer.latest(after_sequence=last_sequence)
-        if snapshot is None:
-            _check_cancel(cv2.waitKey(10))
-            continue
-        last_sequence = snapshot.sequence
-        preview = cv2.flip(snapshot.frame, 1)
-        _put_text(preview, "Sit normally; SPACE starts calibration, ESC cancels")
-        cv2.imshow(window, preview)
-        key = cv2.waitKey(1)
-        _check_cancel(key)
-        if key & 0xFF == 32:
-            return
+    try:
+        while True:
+            snapshot = camera.buffer.latest(after_sequence=last_sequence)
+            if snapshot is None:
+                _check_cancel(cv2.waitKeyEx(10))
+                continue
+            last_sequence = snapshot.sequence
+            preview = cv2.flip(snapshot.frame, 1)
+            _put_text(preview, "Click preview or press SPACE to start; ESC cancels")
+            cv2.imshow(window, preview)
+            key = cv2.waitKeyEx(1)
+            _check_cancel(key)
+            if clicked or key & 0xFF == 32:
+                return
+    finally:
+        if hasattr(cv2, "WND_PROP_TOPMOST"):
+            cv2.setWindowProperty(window, cv2.WND_PROP_TOPMOST, 0)
 
 
 def _run_preview_phase(

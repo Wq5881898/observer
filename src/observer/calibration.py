@@ -138,6 +138,7 @@ class AttentionCalibration:
     valid_sample_count: int
     coverage: float
     allowed_margin: float = 0.08
+    maximum_context_z: float = 5.0
 
     def __post_init__(self) -> None:
         feature_count = len(self.feature_names)
@@ -155,6 +156,7 @@ class AttentionCalibration:
             self.training_rmse,
             self.coverage,
             self.allowed_margin,
+            self.maximum_context_z,
         )
         if any(not math.isfinite(value) for value in numeric):
             raise ValueError("attention calibration values must be finite")
@@ -169,6 +171,7 @@ class AttentionCalibration:
             or self.valid_sample_count < 1
             or not 0 <= self.coverage <= 1
             or not 0 <= self.allowed_margin <= 0.5
+            or self.maximum_context_z <= 0
         ):
             raise ValueError("attention calibration metrics are invalid")
 
@@ -192,10 +195,31 @@ class AttentionCalibration:
         return predicted_x, predicted_y
 
     def evaluate(self, features: FeatureVector) -> SignalValue:
-        try:
-            x, y = self.predict(features)
-        except ValueError as exc:
-            return SignalValue.unknown(str(exc))
+        if features.kind != "attention" or features.version != self.feature_version:
+            return SignalValue.unknown(
+                "attention feature version does not match calibration"
+            )
+        if not features.observable:
+            return SignalValue.unknown("; ".join(features.reasons))
+        missing = [name for name in self.feature_names if name not in features.values]
+        if missing:
+            return SignalValue.unknown(f"attention features are missing: {missing}")
+        context_scores = []
+        for name in ("face_center_x", "face_center_y", "face_scale"):
+            if name not in self.feature_names or name not in features.values:
+                continue
+            index = self.feature_names.index(name)
+            context_scores.append(
+                abs(features.values[name] - self.feature_means[index])
+                / self.feature_scales[index]
+            )
+        maximum_context_score = max(context_scores, default=0.0)
+        if maximum_context_score > self.maximum_context_z:
+            return SignalValue.unknown(
+                "face position or scale is outside the attention calibration envelope",
+                attention_context_z=maximum_context_score,
+            )
+        x, y = self.predict(features)
         margin = self.allowed_margin
         outside_distance = max(-margin - x, x - (1.0 + margin), -margin - y, y - (1.0 + margin), 0.0)
         metrics = {"attention_screen_x": x, "attention_screen_y": y}

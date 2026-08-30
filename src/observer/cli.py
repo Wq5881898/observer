@@ -13,7 +13,7 @@ from typing import Sequence
 from observer.camera import CameraWorker
 from observer.config import load_config
 from observer.models import sha256_file, verify_model_directory
-from observer.resources import ResourceSampler, summarize_resources
+from observer.resources import ResourceSampler, percentile, summarize_resources
 
 
 def _doctor(config_path: Path | None) -> int:
@@ -99,6 +99,18 @@ def _vision_smoke(
     last_sequence = 0
     next_resource_sample = 0.0
     last_observation = None
+    signal_state_counts: dict[str, dict[str, int]] = {}
+    signal_reason_counts: dict[str, dict[str, int]] = {}
+    signal_metric_values: dict[str, dict[str, list[float]]] = {}
+    feature_metric_values: dict[str, dict[str, list[float]]] = {
+        "attention": {},
+        "posture": {},
+    }
+    feature_reason_counts: dict[str, dict[str, int]] = {
+        "attention": {},
+        "posture": {},
+    }
+    previous_feature_runs = {"attention": 0, "posture": 0}
     try:
         if not camera.start():
             print(json.dumps({"camera": asdict(camera.stats)}, indent=2, ensure_ascii=False))
@@ -129,6 +141,31 @@ def _vision_smoke(
             last_sequence = snapshot.sequence
             probe.process_due(snapshot.frame, snapshot.captured_monotonic)
             last_observation = probe.observation(snapshot.captured_monotonic)
+            for name, signal in last_observation.signals.items():
+                counts = signal_state_counts.setdefault(name, {})
+                counts[signal.state.value] = counts.get(signal.state.value, 0) + 1
+                if signal.reason:
+                    reasons = signal_reason_counts.setdefault(name, {})
+                    reasons[signal.reason] = reasons.get(signal.reason, 0) + 1
+                metrics = signal_metric_values.setdefault(name, {})
+                for metric_name, value in signal.metrics.items():
+                    metrics.setdefault(metric_name, []).append(value)
+            current_feature_runs = {
+                "attention": probe.measurements.face.runs,
+                "posture": probe.measurements.pose.runs,
+            }
+            for kind, feature in (
+                ("attention", probe.latest_attention_features),
+                ("posture", probe.latest_posture_features),
+            ):
+                if feature is None or current_feature_runs[kind] == previous_feature_runs[kind]:
+                    continue
+                for metric_name, value in feature.values.items():
+                    feature_metric_values[kind].setdefault(metric_name, []).append(value)
+                for reason in feature.reasons:
+                    reasons = feature_reason_counts[kind]
+                    reasons[reason] = reasons.get(reason, 0) + 1
+                previous_feature_runs[kind] = current_feature_runs[kind]
             now = time.monotonic()
             if now >= next_resource_sample:
                 samples.append(sampler.sample())
@@ -143,10 +180,23 @@ def _vision_smoke(
         "camera": asdict(camera.stats),
         "vision": probe.summary() if probe is not None else None,
         "last_signals": (
-            {name: value.state.value for name, value in last_observation.signals.items()}
+            {
+                name: {
+                    "state": value.state.value,
+                    "confidence": value.confidence,
+                    "reason": value.reason,
+                    "metrics": dict(value.metrics),
+                }
+                for name, value in last_observation.signals.items()
+            }
             if last_observation is not None
             else None
         ),
+        "signal_state_counts": signal_state_counts,
+        "signal_reason_counts": signal_reason_counts,
+        "signal_metric_summary": _numeric_summary(signal_metric_values),
+        "feature_reason_counts": feature_reason_counts,
+        "feature_metric_summary": _numeric_summary(feature_metric_values),
         "resources": asdict(summarize_resources(samples, config.resources)),
     }
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -154,6 +204,26 @@ def _vision_smoke(
         return 3
     runs = probe.measurements
     return 0 if runs.face.runs and runs.pose.runs and runs.object.runs else 4
+
+
+def _numeric_summary(
+    grouped: dict[str, dict[str, list[float]]],
+) -> dict[str, dict[str, dict[str, float]]]:
+    return {
+        group: {
+            name: {
+                "minimum": min(values),
+                "p05": percentile(values, 0.05),
+                "median": percentile(values, 0.5),
+                "p95": percentile(values, 0.95),
+                "maximum": max(values),
+                "average": sum(values) / len(values),
+            }
+            for name, values in metrics.items()
+            if values
+        }
+        for group, metrics in grouped.items()
+    }
 
 
 def _calibrate(config_path: Path | None, models_dir: Path, output_path: Path) -> int:
