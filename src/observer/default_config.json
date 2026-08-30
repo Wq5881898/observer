@@ -1,0 +1,58 @@
+{
+  "camera": {
+    "device_index": 0,
+    "width": 640,
+    "height": 480,
+    "capture_fps": 15.0,
+    "backend": "dshow",
+    "read_failure_backoff_ms": 200
+  },
+  "inference": {
+    "face_fps": 8.0,
+    "pose_fps": 4.0,
+    "object_fps": 1.5,
+    "object_burst_fps": 5.0,
+    "busy_face_fps": 5.0,
+    "busy_pose_fps": 2.0,
+    "busy_object_fps": 0.75
+  },
+  "resources": {
+    "cpu_average_percent": 15.0,
+    "cpu_p95_percent": 25.0,
+    "memory_steady_mb": 500.0,
+    "memory_growth_mb_per_hour": 50.0,
+    "max_inference_workers": 3
+  },
+  "rules": [
+    {
+      "rule_id": "away",
+      "signal_name": "away",
+      "trigger_after_seconds": 20.0,
+      "initial_penalty_points": 3.0,
+      "maximum_penalty_points": 15.0
+    },
+    {
+      "rule_id": "attention_away",
+      "signal_name": "attention_away",
+      "trigger_after_seconds": 8.0,
+      "initial_penalty_points": 3.0,
+      "maximum_penalty_points": 15.0
+    },
+    {
+      "rule_id": "posture_deviation",
+      "signal_name": "posture_deviation",
+      "trigger_after_seconds": 20.0,
+      "initial_penalty_points": 2.0,
+      "maximum_penalty_points": 10.0
+    },
+    {
+      "rule_id": "phone_held",
+      "signal_name": "phone_held",
+      "trigger_after_seconds": 10.0,
+      "initial_penalty_points": 5.0,
+      "repeat_penalty_points": 2.0,
+      "repeat_penalty_interval_seconds": 60.0,
+      "maximum_penalty_points": 25.0
+    }
+  ]
+}
