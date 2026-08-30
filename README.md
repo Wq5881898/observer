@@ -16,6 +16,8 @@ Observer 是一个本地优先的专注与坐姿辅助程序。它使用电脑�
 
 技术边界和整体路线见 [可行性研究](docs/feasibility-study.md)，各模块决策见 [完整技术选型对比](docs/technology-selection.md)，当前电脑适配与运行开销要求见 [成熟度、硬件与性能评估](docs/maturity-hardware-performance.md)。
 
+大阶段、门控和当前状态见 [总体阶段计划](docs/master-plan.md)。阶段 C 按 [阶段 C 基准](docs/phase-c-baseline.md)、[校准与验证协议](docs/phase-c-validation-protocol.md) 和 [设计到真实验证交接](docs/phase-c-validation-handoff.md) 实施；真实数据将同时评价准确率和设计是否过度。
+
 手机检测默认使用 MediaPipe EfficientDet-Lite0 int8。只有它在真实使用场景中达不到手机手持事件验收线时，才评估 YOLO11n ONNX/OpenVINO；正式运行不会同时执行两个物体检测模型。
 
 ## 已确定的产品原则
