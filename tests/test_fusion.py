@@ -17,12 +17,28 @@ class ObservationFusionTests(unittest.TestCase):
         observation = fusion.build(10.1)
         self.assertIs(observation.signal("away").state, SignalState.COMPLIANT)
 
-    def test_absence_requires_both_detectors_to_be_fresh_and_empty(self) -> None:
+    def test_absence_requires_all_presence_detectors_to_be_fresh_and_empty(self) -> None:
         fusion = ObservationFusion()
         fusion.update_face(10.0, 0)
         self.assertIs(fusion.build(10.1).signal("away").state, SignalState.UNKNOWN)
         fusion.update_pose(10.1, 0, ())
+        self.assertIs(fusion.build(10.2).signal("away").state, SignalState.UNKNOWN)
+        fusion.update_person_presence(10.1, 0)
         self.assertIs(fusion.build(10.2).signal("away").state, SignalState.VIOLATION)
+
+    def test_implausible_pose_does_not_count_as_person_presence(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_face(10.0, 0)
+        fusion.update_pose(10.0, 1, (), presence_credible=False)
+        fusion.update_person_presence(10.0, 0)
+        self.assertIs(fusion.build(10.1).signal("away").state, SignalState.VIOLATION)
+
+    def test_person_detector_confirms_presence_without_face_or_pose(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_face(10.0, 0)
+        fusion.update_pose(10.0, 0, ())
+        fusion.update_person_presence(10.0, 1)
+        self.assertIs(fusion.build(10.1).signal("away").state, SignalState.COMPLIANT)
 
     def test_stale_object_result_is_unknown(self) -> None:
         fusion = ObservationFusion()
@@ -77,6 +93,7 @@ class ObservationFusionTests(unittest.TestCase):
         fusion.update_quality(10.0, False, "frame too dark")
         fusion.update_face(10.0, 0)
         fusion.update_pose(10.0, 0, ())
+        fusion.update_person_presence(10.0, 0)
         fusion.update_attention(10.0, SignalValue.violation(confidence=1.0))
         fusion.update_posture(10.0, SignalValue.violation(confidence=1.0))
         observation = fusion.build(10.1)

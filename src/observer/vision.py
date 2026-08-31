@@ -19,9 +19,11 @@ from observer.observations import (
     SignalValue,
 )
 from observer.perception import (
+    FeatureMedianSmoother,
     FeatureVector,
     FrameQuality,
     PhoneCandidateTracker,
+    PresenceHitTracker,
     QualityThresholds,
     assess_frame_quality,
     extract_attention_features,
@@ -64,6 +66,7 @@ class VisionProbeMeasurements:
     maximum_faces: int = 0
     maximum_poses: int = 0
     phone_detections: int = 0
+    person_detections: int = 0
     quality_rejected_frames: int = 0
 
     def summary(self) -> dict[str, Any]:
@@ -74,6 +77,7 @@ class VisionProbeMeasurements:
             "maximum_faces": self.maximum_faces,
             "maximum_poses": self.maximum_poses,
             "phone_detections": self.phone_detections,
+            "person_detections": self.person_detections,
             "quality_rejected_frames": self.quality_rejected_frames,
         }
 
@@ -98,6 +102,9 @@ class MediapipeVisionProbe:
                 base_options=mp.tasks.BaseOptions(model_asset_path=str(models.face)),
                 running_mode=mode,
                 num_faces=1,
+                min_face_detection_confidence=rates.face_detection_confidence,
+                min_face_presence_confidence=rates.face_presence_confidence,
+                min_tracking_confidence=rates.face_tracking_confidence,
                 output_face_blendshapes=True,
                 output_facial_transformation_matrixes=True,
             )
@@ -114,9 +121,9 @@ class MediapipeVisionProbe:
             vision.ObjectDetectorOptions(
                 base_options=mp.tasks.BaseOptions(model_asset_path=str(models.object)),
                 running_mode=mode,
-                max_results=3,
+                max_results=4,
                 score_threshold=0.25,
-                category_allowlist=["cell phone"],
+                category_allowlist=["cell phone", "person"],
             )
         )
         self._next_due = {"face": 0.0, "pose": 0.0, "object": 0.0}
@@ -126,13 +133,19 @@ class MediapipeVisionProbe:
         self._quality_thresholds = calibration.quality if calibration else QualityThresholds()
         self._last_quality: FrameQuality | None = None
         self._last_attention_features: FeatureVector | None = None
+        self._last_smoothed_attention_features: FeatureVector | None = None
+        self._attention_smoother = FeatureMedianSmoother("attention")
         self._last_posture_features: FeatureVector | None = None
         self._latest_face_landmarks: Any = None
         self._latest_face_at: float | None = None
         self._latest_pose_at: float | None = None
+        self._last_pose_presence_credible = False
         self._latest_object_at: float | None = None
         self._last_raw_phones: tuple[PhoneCandidate, ...] = ()
         self._last_tracked_phones: tuple[PhoneCandidate, ...] = ()
+        self._last_person_count = 0
+        self._last_raw_person_count = 0
+        self._person_tracker = PresenceHitTracker(confirmation_hits=2)
         self._phone_tracker = PhoneCandidateTracker()
 
     def close(self) -> None:
@@ -183,13 +196,25 @@ class MediapipeVisionProbe:
             self._last_attention_features = extract_attention_features(
                 self._latest_face_landmarks, self._quality_thresholds
             )
+            if quality.observable:
+                # A Face Landmarker miss is an unobservable sample, not a reason
+                # to discard the robust history immediately. The smoother returns
+                # unknown for the missed frame and clears only after repeated loss.
+                self._last_smoothed_attention_features = self._attention_smoother.update(
+                    self._last_attention_features
+                )
+            else:
+                self._attention_smoother.reset()
+                self._last_smoothed_attention_features = FeatureVector(
+                    "attention", {}, reasons=quality.reasons
+                )
             if not quality.observable:
                 attention_signal = self._unknown_quality_signal(quality)
             elif self._calibration is None:
                 attention_signal = self._unknown_signal("attention calibration not available")
             else:
                 attention_signal = self._calibration.attention.evaluate(
-                    self._last_attention_features
+                    self._last_smoothed_attention_features
                 )
             self._fusion.update_attention(now_monotonic, attention_signal)
             self._next_due["face"] = now_monotonic + 1.0 / self._rates.face_fps
@@ -213,8 +238,6 @@ class MediapipeVisionProbe:
                     )
                     for index in (15, 16)
                 )
-            self._fusion.update_pose(now_monotonic, count, wrists)
-            self._latest_pose_at = now_monotonic
             face_is_fresh = (
                 self._latest_face_at is not None
                 and 0 <= now_monotonic - self._latest_face_at <= 0.75
@@ -224,6 +247,16 @@ class MediapipeVisionProbe:
                 self._latest_face_landmarks if face_is_fresh else None,
                 self._quality_thresholds,
             )
+            self._last_pose_presence_credible = self._pose_presence_credible(
+                self._last_posture_features
+            )
+            self._fusion.update_pose(
+                now_monotonic,
+                count,
+                wrists,
+                presence_credible=self._last_pose_presence_credible,
+            )
+            self._latest_pose_at = now_monotonic
             if not quality.observable:
                 posture_signal = self._unknown_quality_signal(quality)
             elif self._calibration is None:
@@ -238,9 +271,16 @@ class MediapipeVisionProbe:
             result = self._object.detect_for_video(image, timestamp_ms)
             elapsed = (time.perf_counter() - started) * 1000
             phone_count = 0
+            person_count = 0
             phones: list[PhoneCandidate] = []
             frame_height, frame_width = bgr_frame.shape[:2]
             for detection in result.detections:
+                person_count += int(
+                    any(
+                        category.category_name == "person"
+                        for category in detection.categories
+                    )
+                )
                 phone_categories = [
                     category
                     for category in detection.categories
@@ -261,12 +301,17 @@ class MediapipeVisionProbe:
                     )
                 )
             self.measurements.phone_detections += phone_count
-            self.measurements.object.record(phone_count > 0, elapsed)
+            self.measurements.person_detections += person_count
+            self.measurements.object.record(phone_count > 0 or person_count > 0, elapsed)
             tracked_phones = self._phone_tracker.update(now_monotonic, phones)
+            confirmed_person_count = self._person_tracker.update(person_count)
             self._latest_object_at = now_monotonic
             self._last_raw_phones = tuple(phones)
             self._last_tracked_phones = tracked_phones
+            self._last_raw_person_count = person_count
+            self._last_person_count = confirmed_person_count
             self._fusion.update_phones(now_monotonic, tracked_phones)
+            self._fusion.update_person_presence(now_monotonic, confirmed_person_count)
             object_fps = (
                 self._rates.object_burst_fps
                 if self._phone_tracker.burst_active(now_monotonic)
@@ -288,6 +333,10 @@ class MediapipeVisionProbe:
     @property
     def latest_attention_features(self) -> FeatureVector | None:
         return self._last_attention_features
+
+    @property
+    def latest_smoothed_attention_features(self) -> FeatureVector | None:
+        return self._last_smoothed_attention_features
 
     @property
     def latest_posture_features(self) -> FeatureVector | None:
@@ -334,6 +383,16 @@ class MediapipeVisionProbe:
                 if self._last_attention_features is not None
                 else ()
             ),
+            "attention_smoothed": (
+                dict(self._last_smoothed_attention_features.values)
+                if self._last_smoothed_attention_features is not None
+                else None
+            ),
+            "attention_smoothed_reasons": (
+                self._last_smoothed_attention_features.reasons
+                if self._last_smoothed_attention_features is not None
+                else ()
+            ),
             "posture": (
                 dict(self._last_posture_features.values)
                 if self._last_posture_features is not None
@@ -344,14 +403,30 @@ class MediapipeVisionProbe:
                 if self._last_posture_features is not None
                 else ()
             ),
+            "pose_presence_credible": self._last_pose_presence_credible,
             "raw_phones": [phone_value(phone) for phone in self._last_raw_phones],
             "tracked_phones": [phone_value(phone) for phone in self._last_tracked_phones],
+            "raw_person_count": self._last_raw_person_count,
+            "person_count": self._last_person_count,
             "runs": {
                 "face": self.measurements.face.runs,
                 "pose": self.measurements.pose.runs,
                 "object": self.measurements.object.runs,
             },
         }
+
+    def _pose_presence_credible(self, features: FeatureVector) -> bool:
+        """Reject weak background Pose hits before treating them as a person."""
+
+        if not features.observable or "shoulder_width" not in features.values:
+            return False
+        shoulder_width = features.values["shoulder_width"]
+        if self._calibration is None:
+            return shoulder_width >= 0.10
+        reference = self._calibration.posture.stats.get("shoulder_width")
+        if reference is None:
+            return shoulder_width >= 0.10
+        return shoulder_width >= reference.median * 0.75
 
     @staticmethod
     def _unknown_signal(reason: str) -> SignalValue:

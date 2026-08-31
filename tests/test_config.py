@@ -9,6 +9,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.camera.width, 640)
         self.assertEqual(config.camera.height, 480)
         self.assertLess(config.inference.object_fps, config.inference.face_fps)
+        self.assertEqual(config.inference.face_detection_confidence, 0.35)
         self.assertEqual(config.resources.max_inference_workers, 3)
         self.assertEqual(len(config.rules), 4)
         phone = next(rule for rule in config.rules if rule.rule_id == "phone_held")
@@ -25,6 +26,12 @@ class ConfigTests(unittest.TestCase):
                     "camera": {"capture_fps": 5.0},
                     "inference": {"face_fps": 8.0},
                 }
+            )
+
+    def test_face_confidence_must_be_probability(self) -> None:
+        with self.assertRaisesRegex(ValueError, "face_detection_confidence"):
+            AppConfig.from_mapping(
+                {"inference": {"face_detection_confidence": 1.1}}
             )
 
     def test_duplicate_rule_ids_are_rejected(self) -> None:

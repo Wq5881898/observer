@@ -36,6 +36,7 @@ class ObservationFusion:
         self._wrists: tuple[NormalizedPoint, ...] = ()
         self._object_at: float | None = None
         self._phones: tuple[PhoneCandidate, ...] = ()
+        self._person_count = 0
         self._attention_at: float | None = None
         self._attention = SignalValue.unknown("attention calibration not available")
         self._posture_at: float | None = None
@@ -55,16 +56,22 @@ class ObservationFusion:
         at_monotonic: float,
         pose_count: int,
         wrists: tuple[NormalizedPoint, ...],
+        *,
+        presence_credible: bool = True,
     ) -> None:
         self._pose_at = at_monotonic
-        self._pose_count = max(0, pose_count)
-        self._wrists = wrists if pose_count > 0 else ()
+        self._pose_count = max(0, pose_count) if presence_credible else 0
+        self._wrists = wrists if self._pose_count > 0 else ()
 
     def update_phones(
         self, at_monotonic: float, phones: tuple[PhoneCandidate, ...]
     ) -> None:
         self._object_at = at_monotonic
         self._phones = phones
+
+    def update_person_presence(self, at_monotonic: float, person_count: int) -> None:
+        self._object_at = at_monotonic
+        self._person_count = max(0, person_count)
 
     def update_attention(self, at_monotonic: float, signal: SignalValue) -> None:
         self._attention_at = at_monotonic
@@ -92,12 +99,18 @@ class ObservationFusion:
 
         if quality_fresh and not self._quality_observable:
             away = SignalValue.unknown(self._quality_reason)
-        elif (face_fresh and self._face_count > 0) or (pose_fresh and self._pose_count > 0):
+        elif (
+            (face_fresh and self._face_count > 0)
+            or (pose_fresh and self._pose_count > 0)
+            or (object_fresh and self._person_count > 0)
+        ):
             away = SignalValue.compliant(confidence=1.0)
-        elif face_fresh and pose_fresh:
+        elif face_fresh and pose_fresh and object_fresh:
             away = SignalValue.violation(confidence=1.0)
         else:
-            away = SignalValue.unknown("face and pose presence are not both fresh")
+            away = SignalValue.unknown(
+                "face, pose, and person detector presence are not all fresh"
+            )
 
         if quality_fresh and not self._quality_observable:
             phone_held = SignalValue.unknown(self._quality_reason)

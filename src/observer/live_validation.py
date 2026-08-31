@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from observer.alignment import guide_alignment
 from observer.calibration import load_profile
 from observer.calibration_workflow import current_environment
 from observer.camera import CameraWorker
@@ -19,6 +20,7 @@ from observer.config import AppConfig
 from observer.models import ModelFiles, sha256_file
 from observer.observations import SignalState, SignalValue
 from observer.resources import ResourceSampler, summarize_resources
+from observer.scoring import RuleEngine
 from observer.validation import (
     ErrorEvidenceStore,
     EvidencePolicy,
@@ -72,8 +74,22 @@ SCENARIOS: tuple[Scenario, ...] = (
 )
 
 
+AWAY_EVENT_SCENARIOS: tuple[Scenario, ...] = (
+    Scenario("event_normal", "away", SignalState.COMPLIANT, "Sit normally; no alert expected", duration_seconds=8.0, repetitions=1),
+    Scenario("event_brief_away", "away", SignalState.VIOLATION, "Leave camera view for 10s; no alert expected", duration_seconds=10.0, repetitions=1),
+    Scenario("event_brief_recovery", "away", SignalState.COMPLIANT, "Return and sit normally", duration_seconds=3.0, repetitions=1),
+    Scenario("event_sustained_away", "away", SignalState.VIOLATION, "Leave camera view for 25s; alert expected near 20s", duration_seconds=25.0, repetitions=1),
+    Scenario("event_sustained_recovery", "away", SignalState.COMPLIANT, "Return and sit normally; recovery expected", duration_seconds=4.0, repetitions=1),
+    Scenario("event_face_covered", "away", SignalState.COMPLIANT, "Cover full face with blank paper; keep torso visible", duration_seconds=8.0, repetitions=1),
+    Scenario("event_camera_covered", "away", SignalState.UNKNOWN, "Cover the camera completely", duration_seconds=5.0, repetitions=1),
+)
+
+
 class ValidationCancelled(RuntimeError):
     pass
+
+
+TRIAL_PREPARE_SECONDS = 3.0
 
 
 def scenario_catalog() -> list[dict[str, Any]]:
@@ -120,6 +136,15 @@ def run_live_validation(
         environment = current_environment(config, first.frame.shape)
         profile = load_profile(profile_path, environment)
         probe = MediapipeVisionProbe(models, config.inference, profile)
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        alignment = guide_alignment(
+            camera,
+            probe,
+            profile,
+            window,
+            require_posture="posture_deviation" in signal_names,
+        )
         batch_id = f"{dataset_role}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
         batch_directory = Path(output_root) / batch_id
         config_hash = _config_hash(config)
@@ -132,13 +157,12 @@ def run_live_validation(
             model_manifest_sha256=manifest_hash,
             calibration_profile_id=profile.profile_id,
             environment=asdict(environment),
+            alignment=asdict(alignment),
         )
         recorder = JsonlTrialRecorder(batch_directory, manifest)
         evidence = ErrorEvidenceStore(
             batch_directory / "evidence", EvidencePolicy(enabled=save_error_evidence)
         )
-        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         for scenario in selected:
             repetitions = repetitions_override or scenario.repetitions
             for repetition in range(1, repetitions + 1):
@@ -187,6 +211,352 @@ def run_live_validation(
         cv2.destroyAllWindows()
 
 
+def run_away_event_validation(
+    config: AppConfig,
+    models: ModelFiles,
+    profile_path: str | Path,
+    *,
+    dataset_role: str,
+    output_root: str | Path = "data/validation",
+) -> Path:
+    """Exercise the configured away rule against one continuous live session."""
+
+    import cv2
+
+    away_configs = tuple(rule for rule in config.rules if rule.rule_id == "away")
+    if len(away_configs) != 1 or away_configs[0].signal_name != "away":
+        raise ValueError("event validation requires exactly one configured away rule")
+    away_config = away_configs[0]
+    if away_config.trigger_after_seconds >= 25.0:
+        raise ValueError("sustained event scenario must outlast the configured away trigger")
+
+    camera = CameraWorker(config.camera)
+    probe: MediapipeVisionProbe | None = None
+    window = "Observer Stage C away event validation"
+    sampler = ResourceSampler()
+    resource_samples: list[Any] = []
+    try:
+        if not camera.start():
+            raise RuntimeError(camera.stats.last_error or "camera could not be opened")
+        first = _wait_for_frame(camera)
+        environment = current_environment(config, first.frame.shape)
+        profile = load_profile(profile_path, environment)
+        probe = MediapipeVisionProbe(models, config.inference, profile)
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        alignment = guide_alignment(camera, probe, profile, window)
+
+        batch_id = (
+            f"event-{dataset_role}-"
+            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+            f"{uuid4().hex[:8]}"
+        )
+        batch_directory = Path(output_root) / batch_id
+        batch_directory.mkdir(parents=True, exist_ok=False)
+        manifest = new_batch_manifest(
+            batch_id=batch_id,
+            dataset_role=dataset_role,
+            git_commit=_git_commit(),
+            config_sha256=_config_hash(config),
+            model_manifest_sha256=sha256_file(models.face.parent / "manifest.json"),
+            calibration_profile_id=profile.profile_id,
+            environment=asdict(environment),
+            alignment=asdict(alignment),
+        )
+        (batch_directory / "manifest.json").write_text(
+            json.dumps(asdict(manifest), indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+
+        engine = RuleEngine((away_config,))
+        segments: list[dict[str, Any]] = []
+        actions: list[dict[str, Any]] = []
+        samples_path = batch_directory / "event_samples.jsonl"
+        for scenario in AWAY_EVENT_SCENARIOS:
+            _await_ready(camera, window, scenario, 1, 1)
+            segment, segment_actions, derived_records, interrupted = _run_event_segment(
+                camera,
+                probe,
+                engine,
+                window,
+                scenario,
+                sampler,
+                resource_samples,
+            )
+            segments.append(segment)
+            actions.extend(segment_actions)
+            _append_jsonl(samples_path, derived_records)
+            if interrupted:
+                raise ValidationCancelled(
+                    f"event validation cancelled during {scenario.scenario_id}"
+                )
+
+        report = evaluate_away_event_report(
+            segments,
+            actions,
+            trigger_after_seconds=away_config.trigger_after_seconds,
+            recovery_after_seconds=away_config.recovery_after_seconds,
+            expected_penalty_points=away_config.initial_penalty_points,
+            final_score=engine.ledger.score,
+        )
+        (batch_directory / "event_segments.json").write_text(
+            json.dumps(segments, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        (batch_directory / "event_actions.json").write_text(
+            json.dumps(actions, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        (batch_directory / "event_report.json").write_text(
+            json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        resources = asdict(summarize_resources(resource_samples, config.resources))
+        (batch_directory / "resources.json").write_text(
+            json.dumps(resources, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        return batch_directory
+    finally:
+        if probe is not None:
+            probe.close()
+        camera.stop()
+        cv2.destroyAllWindows()
+
+
+def _run_event_segment(
+    camera: CameraWorker,
+    probe: MediapipeVisionProbe,
+    engine: RuleEngine,
+    window: str,
+    scenario: Scenario,
+    sampler: ResourceSampler,
+    resource_samples: list[Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], bool]:
+    import cv2
+
+    started = time.monotonic()
+    last_sequence = 0
+    last_resource_sample = 0.0
+    state_counts = {state.value: 0 for state in SignalState}
+    segment_actions: list[dict[str, Any]] = []
+    derived_records: list[dict[str, Any]] = []
+    previous_runs = (-1, -1, -1)
+    interrupted = False
+    while time.monotonic() - started < scenario.duration_seconds:
+        snapshot = camera.buffer.latest(after_sequence=last_sequence)
+        if snapshot is None:
+            if cv2.waitKey(1) & 0xFF == 27:
+                interrupted = True
+                break
+            continue
+        last_sequence = snapshot.sequence
+        probe.process_due(snapshot.frame, snapshot.captured_monotonic)
+        observation = probe.observation(snapshot.captured_monotonic)
+        signal = observation.signal("away")
+        state_counts[signal.state.value] += 1
+        result = engine.process(observation)
+        for action in result.actions:
+            action_payload = asdict(action)
+            action_payload["kind"] = action.kind.value
+            action_payload["scenario_id"] = scenario.scenario_id
+            segment_actions.append(action_payload)
+
+        runs = (
+            probe.measurements.face.runs,
+            probe.measurements.pose.runs,
+            probe.measurements.object.runs,
+        )
+        if runs != previous_runs:
+            derived = probe.derived_snapshot()
+            derived.update(
+                {
+                    "scenario_id": scenario.scenario_id,
+                    "captured_monotonic": snapshot.captured_monotonic,
+                    "signal_state": signal.state.value,
+                    "rule_actions": [
+                        action.kind.value for action in result.actions
+                    ],
+                    "score": result.score,
+                }
+            )
+            derived_records.append(derived)
+            previous_runs = runs
+
+        elapsed = time.monotonic() - started
+        canvas = _scenario_canvas(snapshot.frame, scenario)
+        recent = ", ".join(action.kind.value for action in result.actions) or "none"
+        _put_lines(
+            canvas,
+            (
+                scenario.instruction,
+                f"Recording {max(0.0, scenario.duration_seconds - elapsed):0.1f}s",
+                f"away={signal.state.value} actions={recent} score={result.score:0.1f}",
+            ),
+        )
+        cv2.imshow(window, canvas)
+        if cv2.waitKey(1) & 0xFF == 27:
+            interrupted = True
+            break
+        now = time.monotonic()
+        if now - last_resource_sample >= 1.0:
+            resource_samples.append(sampler.sample())
+            last_resource_sample = now
+
+    ended = time.monotonic()
+    return (
+        {
+            "scenario_id": scenario.scenario_id,
+            "instruction": scenario.instruction,
+            "expected_state": scenario.truth_state.value,
+            "started_monotonic": started,
+            "ended_monotonic": ended,
+            "duration_seconds": ended - started,
+            "state_counts": state_counts,
+            "action_kinds": [action["kind"] for action in segment_actions],
+            "interrupted": interrupted,
+        },
+        segment_actions,
+        derived_records,
+        interrupted,
+    )
+
+
+def evaluate_away_event_report(
+    segments: Sequence[dict[str, Any]],
+    actions: Sequence[dict[str, Any]],
+    *,
+    trigger_after_seconds: float,
+    recovery_after_seconds: float,
+    expected_penalty_points: float,
+    final_score: float,
+) -> dict[str, Any]:
+    """Evaluate event semantics without hiding temporal failures behind trial F1."""
+
+    by_scenario = {segment["scenario_id"]: segment for segment in segments}
+    actions_by_scenario = {
+        scenario_id: [
+            action for action in actions if action["scenario_id"] == scenario_id
+        ]
+        for scenario_id in by_scenario
+    }
+
+    def kinds(scenario_id: str) -> list[str]:
+        return [action["kind"] for action in actions_by_scenario[scenario_id]]
+
+    def state_ratio(scenario_id: str, state: str) -> float:
+        counts = by_scenario[scenario_id]["state_counts"]
+        total = sum(counts.values())
+        return counts.get(state, 0) / total if total else 0.0
+
+    sustained_actions = actions_by_scenario["event_sustained_away"]
+    activation = next(
+        (action for action in sustained_actions if action["kind"] == "activated"),
+        None,
+    )
+    activation_delay = (
+        activation["at_monotonic"] - activation["event_started_monotonic"]
+        if activation is not None
+        else None
+    )
+    recovery_actions = actions_by_scenario["event_sustained_recovery"]
+    recovery = next(
+        (
+            action
+            for action in recovery_actions
+            if action["kind"] == "resolved" and action.get("reason") == "recovered"
+        ),
+        None,
+    )
+    recovery_delay = (
+        recovery["at_monotonic"]
+        - by_scenario["event_sustained_recovery"]["started_monotonic"]
+        if recovery is not None
+        else None
+    )
+    face_counts = by_scenario["event_face_covered"]["state_counts"]
+    face_total = sum(face_counts.values())
+    camera_counts = by_scenario["event_camera_covered"]["state_counts"]
+    camera_total = sum(camera_counts.values())
+    penalty_points = sum(
+        action.get("requested_points", 0.0)
+        for action in actions
+        if action["kind"] == "penalty"
+    )
+
+    checks = {
+        "normal_input_valid": state_ratio("event_normal", "compliant") >= 0.8,
+        "normal_no_activation": not any(
+            kind in {"activated", "penalty"} for kind in kinds("event_normal")
+        ),
+        "brief_away_input_valid": state_ratio("event_brief_away", "violation")
+        >= 0.7,
+        "brief_away_no_activation": not any(
+            kind in {"activated", "penalty"}
+            for kind in kinds("event_brief_away")
+        ),
+        "sustained_away_activated_once": kinds("event_sustained_away").count(
+            "activated"
+        )
+        == 1,
+        "sustained_away_alerted_once": kinds("event_sustained_away").count("alert")
+        == 1,
+        "sustained_away_penalized_once": kinds("event_sustained_away").count(
+            "penalty"
+        )
+        == 1,
+        "sustained_away_input_valid": state_ratio(
+            "event_sustained_away", "violation"
+        )
+        >= 0.8,
+        "activation_timing_within_1_5s": activation_delay is not None
+        and abs(activation_delay - trigger_after_seconds) <= 1.5,
+        "recovery_resolved": recovery is not None,
+        "recovery_input_valid": state_ratio(
+            "event_sustained_recovery", "compliant"
+        )
+        >= 0.8,
+        "recovery_timing_within_1_5s": recovery_delay is not None
+        and abs(recovery_delay - recovery_after_seconds) <= 1.5,
+        "face_covered_no_activation": not any(
+            kind in {"activated", "penalty"}
+            for kind in kinds("event_face_covered")
+        ),
+        "face_covered_majority_present": face_total > 0
+        and face_counts.get("compliant", 0) / face_total >= 0.5,
+        "face_covered_input_valid": state_ratio("event_face_covered", "compliant")
+        >= 0.8,
+        "camera_covered_no_activation": not any(
+            kind in {"activated", "penalty"}
+            for kind in kinds("event_camera_covered")
+        ),
+        "camera_covered_majority_unknown": camera_total > 0
+        and camera_counts.get("unknown", 0) / camera_total >= 0.5,
+        "camera_covered_input_valid": state_ratio("event_camera_covered", "unknown")
+        >= 0.8,
+        "penalty_points_match": abs(penalty_points - expected_penalty_points) < 1e-6,
+        "final_score_match": abs(final_score - (100.0 - expected_penalty_points))
+        < 1e-6,
+    }
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "trigger_after_seconds": trigger_after_seconds,
+        "recovery_after_seconds": recovery_after_seconds,
+        "activation_delay_seconds": activation_delay,
+        "recovery_delay_seconds": recovery_delay,
+        "state_ratios": {
+            scenario_id: {
+                state: state_ratio(scenario_id, state)
+                for state in ("compliant", "violation", "unknown", "exempt")
+            }
+            for scenario_id in by_scenario
+        },
+        "penalty_points": penalty_points,
+        "final_score": final_score,
+    }
+
+
 def _await_ready(
     camera: CameraWorker,
     window: str,
@@ -209,7 +579,7 @@ def _await_ready(
                 (
                     f"{scenario.scenario_id} ({repetition}/{repetitions})",
                     scenario.instruction,
-                    "SPACE=start   ESC=cancel batch",
+                    "SPACE=begin 3s preparation   ESC=cancel batch",
                 ),
             )
             cv2.imshow(window, canvas)
@@ -217,7 +587,40 @@ def _await_ready(
         if key & 0xFF == 27:
             raise ValidationCancelled("validation cancelled by user")
         if key & 0xFF == 32:
+            _run_prepare_countdown(camera, window, scenario, TRIAL_PREPARE_SECONDS)
             return
+
+
+def _run_prepare_countdown(
+    camera: CameraWorker,
+    window: str,
+    scenario: Scenario,
+    duration_seconds: float,
+) -> None:
+    import cv2
+
+    started = time.monotonic()
+    last_sequence = 0
+    while time.monotonic() - started < duration_seconds:
+        snapshot = camera.buffer.latest(after_sequence=last_sequence)
+        if snapshot is None:
+            key = cv2.waitKey(10)
+        else:
+            last_sequence = snapshot.sequence
+            canvas = _scenario_canvas(snapshot.frame, scenario)
+            remaining = max(0.0, duration_seconds - (time.monotonic() - started))
+            _put_lines(
+                canvas,
+                (
+                    scenario.instruction,
+                    f"PREPARE NOW - recording starts in {remaining:0.1f}s",
+                    f"Complete the action, then hold it for {scenario.duration_seconds:g}s   ESC=cancel",
+                ),
+            )
+            cv2.imshow(window, canvas)
+            key = cv2.waitKey(1)
+        if key & 0xFF == 27:
+            raise ValidationCancelled("validation cancelled during preparation")
 
 
 def _run_trial(

@@ -34,6 +34,9 @@ class CameraConfig:
 @dataclass(frozen=True, slots=True)
 class InferenceConfig:
     face_fps: float = 8.0
+    face_detection_confidence: float = 0.35
+    face_presence_confidence: float = 0.35
+    face_tracking_confidence: float = 0.35
     pose_fps: float = 4.0
     object_fps: float = 1.5
     object_burst_fps: float = 5.0
@@ -43,6 +46,15 @@ class InferenceConfig:
 
     def validate(self) -> None:
         values = asdict(self)
+        confidence_names = {
+            "face_detection_confidence",
+            "face_presence_confidence",
+            "face_tracking_confidence",
+        }
+        for name in confidence_names:
+            value = values.pop(name)
+            if not 0.05 <= value <= 1.0:
+                raise ValueError(f"inference.{name} must be between 0.05 and 1")
         for name, value in values.items():
             if not 0.1 <= value <= 30.0:
                 raise ValueError(f"inference.{name} must be between 0.1 and 30")

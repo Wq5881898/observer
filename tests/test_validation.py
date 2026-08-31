@@ -12,6 +12,7 @@ from observer.validation import (
     read_trials,
     summarize_trials,
     purge_expired_evidence,
+    new_batch_manifest,
 )
 
 
@@ -30,6 +31,21 @@ def trial(trial_id: str, truth: str, prediction: str) -> TrialRecord:
 
 
 class ValidationTests(unittest.TestCase):
+    def test_manifest_records_same_session_alignment(self) -> None:
+        manifest = new_batch_manifest(
+            batch_id="tuning-test",
+            dataset_role="tuning",
+            git_commit="abc",
+            config_sha256="config",
+            model_manifest_sha256="models",
+            calibration_profile_id="profile",
+            environment={"camera_index": 0},
+            alignment={"final_context_z": 1.8, "frames_saved": 0},
+        )
+
+        self.assertEqual(manifest.alignment["final_context_z"], 1.8)
+        self.assertEqual(manifest.alignment["frames_saved"], 0)
+
     def test_metrics_count_unknown_positive_as_false_negative(self) -> None:
         metrics = summarize_trials(
             [
@@ -45,6 +61,18 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(metrics.false_positive, 1)
         self.assertAlmostEqual(metrics.precision, 0.5)
         self.assertAlmostEqual(metrics.recall, 0.5)
+
+    def test_metrics_expose_expected_unknown_safety_failure(self) -> None:
+        metrics = summarize_trials(
+            [
+                trial("covered", "unknown", "violation"),
+                trial("dark", "unknown", "unknown"),
+            ],
+            "phone_held",
+        )
+
+        self.assertEqual(metrics.expected_unknown_trials, 2)
+        self.assertEqual(metrics.expected_unknown_failures, 1)
 
     def test_jsonl_rejects_invalid_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

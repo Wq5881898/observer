@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
+from statistics import median
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
@@ -16,6 +18,8 @@ class QualityThresholds:
     brightness_min: float = 35.0
     brightness_max: float = 225.0
     blur_variance_min: float = 25.0
+    occlusion_brightness_max: float = 110.0
+    occlusion_blur_variance_max: float = 30.0
     landmark_visibility_min: float = 0.55
     eye_openness_min: float = 0.08
 
@@ -24,6 +28,10 @@ class QualityThresholds:
             raise ValueError("brightness thresholds must satisfy 0 <= min < max <= 255")
         if self.blur_variance_min < 0:
             raise ValueError("blur threshold cannot be negative")
+        if not 0 <= self.occlusion_brightness_max <= 255:
+            raise ValueError("occlusion brightness threshold must be between 0 and 255")
+        if self.occlusion_blur_variance_max < self.blur_variance_min:
+            raise ValueError("occlusion blur threshold must not be below blur minimum")
         if not 0 <= self.landmark_visibility_min <= 1:
             raise ValueError("landmark visibility threshold must be between 0 and 1")
         if not 0 <= self.eye_openness_min <= 1:
@@ -62,6 +70,100 @@ class PerceptionFeatures:
     attention: FeatureVector = field(
         default_factory=lambda: FeatureVector("attention", {}, reasons=("face missing",))
     )
+    posture: FeatureVector = field(
+        default_factory=lambda: FeatureVector("posture", {}, reasons=("pose missing",))
+    )
+
+
+class FeatureMedianSmoother:
+    """Return a robust short-window feature vector without retaining frames."""
+
+    def __init__(
+        self,
+        kind: str,
+        *,
+        window_size: int = 7,
+        minimum_samples: int | None = None,
+        maximum_consecutive_unobservable: int = 3,
+    ) -> None:
+        selected_minimum = minimum_samples or window_size
+        if (
+            not kind
+            or window_size < 1
+            or not 1 <= selected_minimum <= window_size
+            or maximum_consecutive_unobservable < 1
+        ):
+            raise ValueError("feature smoother configuration is invalid")
+        self.kind = kind
+        self.window_size = window_size
+        self.minimum_samples = selected_minimum
+        self.maximum_consecutive_unobservable = maximum_consecutive_unobservable
+        self._samples: deque[FeatureVector] = deque(maxlen=window_size)
+        self._version: str | None = None
+        self._consecutive_unobservable = 0
+
+    def reset(self) -> None:
+        self._samples.clear()
+        self._version = None
+        self._consecutive_unobservable = 0
+
+    def update(self, features: FeatureVector) -> FeatureVector:
+        if features.kind != self.kind:
+            raise ValueError("feature kind does not match smoother")
+        if not features.observable:
+            self._consecutive_unobservable += 1
+            if (
+                self._consecutive_unobservable
+                >= self.maximum_consecutive_unobservable
+            ):
+                self._samples.clear()
+                self._version = None
+            return features
+        self._consecutive_unobservable = 0
+        if self._version is not None and features.version != self._version:
+            self.reset()
+        self._version = features.version
+        self._samples.append(features)
+        if len(self._samples) < self.minimum_samples:
+            return FeatureVector(
+                self.kind,
+                {},
+                version=features.version,
+                reasons=(
+                    f"{self.kind} temporal smoother is warming up "
+                    f"({len(self._samples)}/{self.minimum_samples})",
+                ),
+            )
+        names = set.intersection(*(set(item.values) for item in self._samples))
+        if not names:
+            return FeatureVector(
+                self.kind,
+                {},
+                version=features.version,
+                reasons=("temporal smoother has no common features",),
+            )
+        values = {
+            name: float(median(item.values[name] for item in self._samples))
+            for name in names
+        }
+        return FeatureVector(self.kind, values, version=features.version)
+
+
+class PresenceHitTracker:
+    """Require consecutive detector hits before accepting object presence."""
+
+    def __init__(self, confirmation_hits: int = 2) -> None:
+        if confirmation_hits < 1:
+            raise ValueError("presence confirmation hits must be positive")
+        self.confirmation_hits = confirmation_hits
+        self._hits = 0
+
+    def update(self, count: int) -> int:
+        if count <= 0:
+            self._hits = 0
+            return 0
+        self._hits += 1
+        return count if self._hits >= self.confirmation_hits else 0
 
 
 class PhoneCandidateTracker:
@@ -91,7 +193,11 @@ class PhoneCandidateTracker:
     ) -> tuple[PhoneCandidate, ...]:
         if candidates:
             selected = max(candidates, key=lambda candidate: candidate.confidence)
-            if self._last is not None and self._center_distance(self._last, selected) <= self.maximum_center_distance:
+            if (
+                self._last is not None
+                and self._center_distance(self._last, selected)
+                <= self.maximum_center_distance
+            ):
                 self._hits += 1
             else:
                 self._hits = 1
@@ -117,9 +223,6 @@ class PhoneCandidateTracker:
         second_x = second.box.x + second.box.width / 2.0
         second_y = second.box.y + second.box.height / 2.0
         return math.hypot(first_x - second_x, first_y - second_y)
-    posture: FeatureVector = field(
-        default_factory=lambda: FeatureVector("posture", {}, reasons=("pose missing",))
-    )
 
 
 def assess_frame_quality(
@@ -143,6 +246,11 @@ def assess_frame_quality(
         reasons.append("frame too bright")
     if blur < selected.blur_variance_min:
         reasons.append("frame too blurry")
+    if (
+        brightness <= selected.occlusion_brightness_max
+        and blur <= selected.occlusion_blur_variance_max
+    ):
+        reasons.append("camera view may be covered")
     return FrameQuality(brightness, blur, not reasons, tuple(reasons))
 
 

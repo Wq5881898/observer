@@ -9,6 +9,9 @@
   },
   "inference": {
     "face_fps": 8.0,
+    "face_detection_confidence": 0.35,
+    "face_presence_confidence": 0.35,
+    "face_tracking_confidence": 0.35,
     "pose_fps": 4.0,
     "object_fps": 1.5,
     "object_burst_fps": 5.0,

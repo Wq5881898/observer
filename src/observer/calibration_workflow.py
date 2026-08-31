@@ -4,6 +4,7 @@ import ctypes
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ import numpy as np
 
 from observer.calibration import (
     ATTENTION_POINTS_9,
+    AttentionCalibration,
     AttentionSample,
     CalibrationProfile,
     EnvironmentFingerprint,
@@ -38,24 +40,38 @@ class CalibrationTimings:
     posture_settle_seconds: float = 5.0
     posture_sample_seconds: float = 30.0
     posture_retest_seconds: float = 10.0
-    attention_settle_seconds: float = 1.5
-    attention_sample_seconds: float = 2.0
+    attention_settle_seconds: float = 1.0
+    attention_sample_seconds: float = 1.5
     attention_validation_settle_seconds: float = 1.0
     attention_validation_sample_seconds: float = 1.5
 
 
+ATTENTION_EDGE_POINTS_8: tuple[tuple[str, float, float], ...] = (
+    ("edge_top_left", 0.25, 0.08),
+    ("edge_top_right", 0.75, 0.08),
+    ("edge_bottom_left", 0.25, 0.92),
+    ("edge_bottom_right", 0.75, 0.92),
+    ("edge_left_top", 0.08, 0.25),
+    ("edge_left_bottom", 0.08, 0.75),
+    ("edge_right_top", 0.92, 0.25),
+    ("edge_right_bottom", 0.92, 0.75),
+)
+
+ATTENTION_CALIBRATION_POINTS = ATTENTION_POINTS_9 + ATTENTION_EDGE_POINTS_8
+
 ATTENTION_VALIDATION_POINTS: tuple[tuple[str, float, float], ...] = (
-    ("validate_top_left", 0.25, 0.08),
-    ("validate_top_right", 0.75, 0.08),
-    ("validate_bottom_left", 0.25, 0.92),
-    ("validate_bottom_right", 0.75, 0.92),
-    ("validate_left_top", 0.08, 0.25),
-    ("validate_left_bottom", 0.08, 0.75),
-    ("validate_right_top", 0.92, 0.25),
-    ("validate_right_bottom", 0.92, 0.75),
+    ("validate_inner_top_left", 0.25, 0.25),
+    ("validate_inner_top", 0.50, 0.25),
+    ("validate_inner_top_right", 0.75, 0.25),
+    ("validate_inner_left", 0.25, 0.50),
+    ("validate_inner_right", 0.75, 0.50),
+    ("validate_inner_bottom_left", 0.25, 0.75),
+    ("validate_inner_bottom", 0.50, 0.75),
+    ("validate_inner_bottom_right", 0.75, 0.75),
 )
 
 MAX_ATTENTION_VALIDATION_RMSE = 0.18
+MINIMUM_ATTENTION_SAMPLES_PER_POINT = 7
 
 
 def current_environment(
@@ -162,7 +178,7 @@ def run_guided_calibration(
         cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         attention_raw: list[AttentionSample] = []
         attention_attempts = 0
-        for point_id, x, y in ATTENTION_POINTS_9:
+        for point_id, x, y in ATTENTION_CALIBRATION_POINTS:
             _show_attention_point(
                 camera,
                 probe,
@@ -216,29 +232,64 @@ def run_guided_calibration(
 
         attention_points = aggregate_attention_samples(attention_raw)
         validation_points = aggregate_attention_samples(validation_raw)
-        if len(attention_points) != len(ATTENTION_POINTS_9):
+        if len(attention_points) != len(ATTENTION_CALIBRATION_POINTS):
             raise RuntimeError("one or more attention calibration points had no valid samples")
         if len(validation_points) != len(ATTENTION_VALIDATION_POINTS):
             raise RuntimeError("one or more independent attention validation points failed")
-        attention = fit_attention_calibration(
+        _require_attention_point_sample_counts(
             attention_raw,
-            validation_samples=validation_raw,
+            ATTENTION_CALIBRATION_POINTS,
+            phase="calibration",
+        )
+        _require_attention_point_sample_counts(
+            validation_raw,
+            ATTENTION_VALIDATION_POINTS,
+            phase="validation",
+        )
+        attention = fit_attention_calibration(
+            attention_points,
+            validation_samples=validation_points,
             planned_sample_count=attention_attempts,
             valid_frame_count=len(attention_raw),
         )
         valid_attention_frames = len(attention_raw)
+        profile = create_profile(environment, posture, attention)
+        failure_reason: str | None = None
         if valid_attention_frames / max(attention_attempts, 1) < 0.90:
-            raise RuntimeError("attention calibration coverage is below 90%")
-        if (
+            failure_reason = "attention calibration coverage is below 90%"
+        elif (
             attention.validation_rmse is None
             or attention.validation_rmse > MAX_ATTENTION_VALIDATION_RMSE
         ):
-            raise RuntimeError(
-                "attention edge validation RMSE "
+            failure_reason = (
+                "attention validation RMSE "
                 f"{attention.validation_rmse!r} exceeds {MAX_ATTENTION_VALIDATION_RMSE}"
             )
+        if failure_reason is not None:
+            point_rmse = _attention_validation_rmse_by_point(
+                attention, validation_raw
+            )
+            diagnostics_path = _save_rejected_derived_samples(
+                output_path,
+                profile,
+                posture_samples,
+                retest_samples,
+                attention_raw,
+                validation_raw,
+                failure_reason=failure_reason,
+                attention_validation_rmse_by_point=point_rmse,
+            )
+            worst_points = ", ".join(
+                f"{point_id}={error:.3f}"
+                for point_id, error in sorted(
+                    point_rmse.items(), key=lambda item: item[1], reverse=True
+                )[:3]
+            )
+            raise RuntimeError(
+                f"{failure_reason}; worst points: {worst_points}; "
+                f"derived diagnostics saved to {diagnostics_path}"
+            )
 
-        profile = create_profile(environment, posture, attention)
         save_profile(profile, output_path)
         _save_derived_samples(
             output_path,
@@ -247,6 +298,9 @@ def run_guided_calibration(
             retest_samples,
             attention_raw,
             validation_raw,
+            attention_validation_rmse_by_point=(
+                _attention_validation_rmse_by_point(attention, validation_raw)
+            ),
         )
         return profile
     finally:
@@ -314,6 +368,8 @@ def _run_preview_phase(
     last_sequence = 0
     checked = 0
     observable = 0
+    previous_pose_runs = probe.measurements.pose.runs
+    rejection_reasons: dict[str, int] = {}
     while time.monotonic() - started < duration_seconds:
         snapshot = camera.buffer.latest(after_sequence=last_sequence)
         if snapshot is None:
@@ -323,15 +379,34 @@ def _run_preview_phase(
         probe.process_due(
             snapshot.frame, snapshot.captured_monotonic, frozenset({"face", "pose"})
         )
-        if probe.latest_quality is not None:
+        if probe.measurements.pose.runs > previous_pose_runs:
             checked += 1
-            observable += int(
-                probe.latest_quality.observable
+            accepted = (
+                probe.latest_quality is not None
+                and probe.latest_quality.observable
                 and probe.latest_attention_features is not None
                 and probe.latest_attention_features.observable
                 and probe.latest_posture_features is not None
                 and probe.latest_posture_features.observable
             )
+            observable += int(accepted)
+            if not accepted:
+                current_reasons: list[str] = []
+                if probe.latest_quality is None:
+                    current_reasons.append("no quality result")
+                else:
+                    current_reasons.extend(probe.latest_quality.reasons)
+                if probe.latest_attention_features is None:
+                    current_reasons.append("no observable face/eye features")
+                else:
+                    current_reasons.extend(probe.latest_attention_features.reasons)
+                if probe.latest_posture_features is None:
+                    current_reasons.append("no observable shoulder/posture features")
+                else:
+                    current_reasons.extend(probe.latest_posture_features.reasons)
+                for reason in dict.fromkeys(current_reasons):
+                    rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+            previous_pose_runs = probe.measurements.pose.runs
         preview = cv2.flip(snapshot.frame, 1)
         remaining = max(0.0, duration_seconds - (time.monotonic() - started))
         _put_text(preview, f"{message}  {remaining:0.1f}s")
@@ -340,23 +415,16 @@ def _run_preview_phase(
     if require_quality_coverage is not None:
         coverage = observable / max(checked, 1)
         if coverage < require_quality_coverage:
-            reasons: list[str] = []
-            if probe.latest_quality is None:
-                reasons.append("no quality result")
-            else:
-                reasons.extend(probe.latest_quality.reasons)
-            if probe.latest_attention_features is None:
-                reasons.append("no observable face/eye features")
-            else:
-                reasons.extend(probe.latest_attention_features.reasons)
-            if probe.latest_posture_features is None:
-                reasons.append("no observable shoulder/posture features")
-            else:
-                reasons.extend(probe.latest_posture_features.reasons)
-            reason = "; ".join(dict.fromkeys(reasons)) or "required landmarks unavailable"
+            reason = "; ".join(
+                f"{name} ({count}/{checked})"
+                for name, count in sorted(
+                    rejection_reasons.items(), key=lambda item: item[1], reverse=True
+                )[:3]
+            ) or "required landmarks unavailable"
             raise RuntimeError(
                 f"precheck quality coverage {coverage:.1%} is below "
-                f"{require_quality_coverage:.0%}: {reason}"
+                f"{require_quality_coverage:.0%} across {checked} model observations: "
+                f"{reason}"
             )
 
 
@@ -427,9 +495,11 @@ def _show_attention_point(
     screen_height = max(480, int(cv2.getWindowImageRect(window)[3]))
     canvas = np.full((screen_height, screen_width, 3), 245, dtype=np.uint8)
     point = (int(x * (screen_width - 1)), int(y * (screen_height - 1)))
-    cv2.circle(canvas, point, 18, (30, 80, 220), -1)
+    point_color = (40, 175, 40) if collect else (30, 80, 220)
+    phase_label = "RECORDING - keep looking" if collect else "READY - move eyes to dot"
+    cv2.circle(canvas, point, 18, point_color, -1)
     cv2.circle(canvas, point, 5, (255, 255, 255), -1)
-    _put_text(canvas, f"Look at the dot: {point_id}  ESC cancels")
+    _put_text(canvas, f"{phase_label}: {point_id}  ESC cancels")
     started = time.monotonic()
     last_sequence = 0
     previous_runs = probe.measurements.face.runs
@@ -485,6 +555,10 @@ def _save_derived_samples(
     posture_retest_samples: list[FeatureVector],
     attention_samples: list[AttentionSample],
     attention_validation_samples: list[AttentionSample],
+    *,
+    status: str = "accepted",
+    failure_reason: str | None = None,
+    attention_validation_rmse_by_point: dict[str, float] | None = None,
 ) -> Path:
     """Save compact derived features, never frames or raw landmarks, for complexity audits."""
 
@@ -492,8 +566,16 @@ def _save_derived_samples(
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": 1,
+        "status": status,
+        "failure_reason": failure_reason,
         "profile_id": profile.profile_id,
         "feature_version": profile.posture.feature_version,
+        "attention_training_rmse": profile.attention.training_rmse,
+        "attention_validation_rmse": profile.attention.validation_rmse,
+        "attention_feature_names": list(profile.attention.feature_names),
+        "attention_validation_rmse_by_point": (
+            attention_validation_rmse_by_point or {}
+        ),
         "posture": [dict(sample.values) for sample in posture_samples],
         "posture_retest": [dict(sample.values) for sample in posture_retest_samples],
         "attention": [
@@ -521,3 +603,79 @@ def _save_derived_samples(
     )
     temporary.replace(target)
     return target
+
+
+def _attention_validation_rmse_by_point(
+    calibration: AttentionCalibration,
+    samples: list[AttentionSample],
+) -> dict[str, float]:
+    squared_errors: dict[str, list[float]] = {}
+    for sample in aggregate_attention_samples(samples):
+        if not sample.features.observable:
+            continue
+        predicted_x, predicted_y = calibration.predict(sample.features)
+        squared_errors.setdefault(sample.point_id, []).append(
+            (predicted_x - sample.target_x) ** 2
+            + (predicted_y - sample.target_y) ** 2
+        )
+    return {
+        point_id: float(np.sqrt(sum(errors) / (2 * len(errors))))
+        for point_id, errors in squared_errors.items()
+        if errors
+    }
+
+
+def _require_attention_point_sample_counts(
+    samples: list[AttentionSample],
+    expected_points: tuple[tuple[str, float, float], ...],
+    *,
+    phase: str,
+) -> None:
+    counts: dict[str, int] = {}
+    for sample in samples:
+        if sample.features.observable:
+            counts[sample.point_id] = counts.get(sample.point_id, 0) + 1
+    insufficient = {
+        point_id: counts.get(point_id, 0)
+        for point_id, _x, _y in expected_points
+        if counts.get(point_id, 0) < MINIMUM_ATTENTION_SAMPLES_PER_POINT
+    }
+    if insufficient:
+        detail = ", ".join(
+            f"{point_id}={count}" for point_id, count in insufficient.items()
+        )
+        raise RuntimeError(
+            f"attention {phase} needs at least "
+            f"{MINIMUM_ATTENTION_SAMPLES_PER_POINT} valid samples per point: {detail}"
+        )
+
+
+def _save_rejected_derived_samples(
+    profile_path: str | Path,
+    profile: CalibrationProfile,
+    posture_samples: list[FeatureVector],
+    posture_retest_samples: list[FeatureVector],
+    attention_samples: list[AttentionSample],
+    attention_validation_samples: list[AttentionSample],
+    *,
+    failure_reason: str,
+    attention_validation_rmse_by_point: dict[str, float],
+) -> Path:
+    active_path = Path(profile_path)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    rejected_base = (
+        active_path.parent
+        / "rejected"
+        / f"{active_path.stem}-{timestamp}{active_path.suffix}"
+    )
+    return _save_derived_samples(
+        rejected_base,
+        profile,
+        posture_samples,
+        posture_retest_samples,
+        attention_samples,
+        attention_validation_samples,
+        status="rejected",
+        failure_reason=failure_reason,
+        attention_validation_rmse_by_point=attention_validation_rmse_by_point,
+    )

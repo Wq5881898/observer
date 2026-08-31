@@ -247,6 +247,60 @@ def _calibrate(config_path: Path | None, models_dir: Path, output_path: Path) ->
     return 0
 
 
+def _align(
+    config_path: Path | None,
+    models_dir: Path,
+    profile_path: Path,
+    stable_seconds: float,
+    timeout_seconds: float,
+    verify_seconds: float,
+    require_posture: bool,
+) -> int:
+    from observer.alignment import AlignmentCancelled, AlignmentTimeout, run_alignment
+
+    def assessment_payload(value):
+        if value is None:
+            return None
+        payload = asdict(value)
+        payload["posture_state"] = value.posture_state.value
+        return payload
+
+    config = load_config(config_path)
+    models = verify_model_directory(models_dir)
+    try:
+        result = run_alignment(
+            config,
+            models,
+            profile_path,
+            stable_seconds=stable_seconds,
+            timeout_seconds=timeout_seconds,
+            verify_seconds=verify_seconds,
+            require_posture=require_posture,
+        )
+    except AlignmentCancelled as exc:
+        print(json.dumps({"aligned": False, "reason": str(exc)}, indent=2))
+        return 2
+    except AlignmentTimeout as exc:
+        print(
+            json.dumps(
+                {
+                    "aligned": False,
+                    "reason": str(exc),
+                    "longest_stable_seconds": round(exc.longest_stable_seconds, 3),
+                    "best_assessment": assessment_payload(exc.best_assessment),
+                    "last_assessment": assessment_payload(exc.last_assessment),
+                    "diagnostics": exc.diagnostics,
+                    "frames_saved": 0,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 3
+    print(json.dumps({"aligned": True, **asdict(result)}, indent=2, ensure_ascii=False))
+    return 0
+
+
 def _profile_check(profile_path: Path) -> int:
     from observer.calibration import load_profile
 
@@ -322,6 +376,41 @@ def _validate_live(
     return 0
 
 
+def _validate_away_events(
+    config_path: Path | None,
+    models_dir: Path,
+    profile_path: Path,
+    dataset_role: str,
+    output_root: Path,
+) -> int:
+    from observer.live_validation import run_away_event_validation
+
+    config = load_config(config_path)
+    models = verify_model_directory(models_dir)
+    batch_directory = run_away_event_validation(
+        config,
+        models,
+        profile_path,
+        dataset_role=dataset_role,
+        output_root=output_root,
+    )
+    report_path = batch_directory / "event_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    print(
+        json.dumps(
+            {
+                "batch_directory": str(batch_directory.resolve()),
+                "report": str(report_path.resolve()),
+                "passed": report["passed"],
+                "frames_saved": 0,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return 0 if report["passed"] else 5
+
+
 def _evidence_purge(index_path: Path, apply: bool) -> int:
     from observer.validation import purge_expired_evidence
 
@@ -346,11 +435,31 @@ def build_parser() -> argparse.ArgumentParser:
     vision_parser.add_argument("--models-dir", type=Path, default=Path("models"))
     vision_parser.add_argument("--profile", type=Path)
     calibrate_parser = subparsers.add_parser(
-        "calibrate", help="run guided posture and 9-point attention calibration"
+        "calibrate", help="run guided posture and 17-point attention calibration"
     )
     calibrate_parser.add_argument("--models-dir", type=Path, default=Path("models"))
     calibrate_parser.add_argument(
         "--output", type=Path, default=Path("data/calibration/default.json")
+    )
+    align_parser = subparsers.add_parser(
+        "align", help="return to the saved calibration position without recording"
+    )
+    align_parser.add_argument(
+        "--profile", type=Path, default=Path("data/calibration/default.json")
+    )
+    align_parser.add_argument("--models-dir", type=Path, default=Path("models"))
+    align_parser.add_argument("--stable-seconds", type=float, default=3.0)
+    align_parser.add_argument("--timeout-seconds", type=float, default=120.0)
+    align_parser.add_argument(
+        "--verify-seconds",
+        type=float,
+        default=0.0,
+        help="measure an immediate same-session baseline after alignment",
+    )
+    align_parser.add_argument(
+        "--require-posture",
+        action="store_true",
+        help="also require the calibrated neutral posture before completing alignment",
     )
     profile_parser = subparsers.add_parser(
         "profile-check", help="validate a calibration profile without opening the camera"
@@ -386,6 +495,16 @@ def build_parser() -> argparse.ArgumentParser:
         dest="save_error_evidence",
         help="disable the approved one-error-frame validation policy",
     )
+    event_parser = subparsers.add_parser(
+        "validate-away-events",
+        help="run continuous Stage C away alert, penalty, and recovery scenarios",
+    )
+    event_parser.add_argument("--profile", type=Path, required=True)
+    event_parser.add_argument("--models-dir", type=Path, default=Path("models"))
+    event_parser.add_argument("--role", choices=("tuning", "holdout"), required=True)
+    event_parser.add_argument(
+        "--output-root", type=Path, default=Path("data/validation")
+    )
     purge_parser = subparsers.add_parser(
         "evidence-purge", help="dry-run or delete expired Stage C error evidence"
     )
@@ -406,6 +525,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _vision_smoke(args.config, args.models_dir, args.seconds, args.profile)
     if args.command == "calibrate":
         return _calibrate(args.config, args.models_dir, args.output)
+    if args.command == "align":
+        return _align(
+            args.config,
+            args.models_dir,
+            args.profile,
+            args.stable_seconds,
+            args.timeout_seconds,
+            args.verify_seconds,
+            args.require_posture,
+        )
     if args.command == "profile-check":
         return _profile_check(args.profile)
     if args.command == "validation-report":
@@ -422,6 +551,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output_root,
             args.repetitions,
             args.save_error_evidence,
+        )
+    if args.command == "validate-away-events":
+        return _validate_away_events(
+            args.config,
+            args.models_dir,
+            args.profile,
+            args.role,
+            args.output_root,
         )
     if args.command == "evidence-purge":
         return _evidence_purge(args.index, args.apply)

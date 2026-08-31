@@ -75,6 +75,22 @@ POSTURE_SCALE_FLOORS: Mapping[str, float] = {
     "face_to_shoulder_scale": 0.025,
 }
 
+# Eyelid aperture is useful for rejecting blinks and poorly observed eyes, but it
+# is not a stable gaze-coordinate input.  Keeping it in the regression lets a
+# short blink or fatigue-related squint move the predicted screen position.
+ATTENTION_NON_POSITIONAL_FEATURES = frozenset({"eye_a_open", "eye_b_open"})
+
+# Regression normalization measures how point medians differ inside one session.
+# It can be much tighter than a person's attainable position after sitting down
+# again, so it must not be used as an unboundedly small context envelope.
+# At the default 5 z limit these floors allow 2% frame width, 3% frame height,
+# and 1% normalized face scale while still rejecting material session shifts.
+ATTENTION_CONTEXT_SCALE_FLOORS: Mapping[str, float] = {
+    "face_center_x": 0.004,
+    "face_center_y": 0.006,
+    "face_scale": 0.002,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class PostureCalibration:
@@ -194,6 +210,30 @@ class AttentionCalibration:
         predicted_y = sum(a * b for a, b in zip(self.coefficients_y, design, strict=True))
         return predicted_x, predicted_y
 
+    def context_statistics(self) -> dict[str, tuple[float, float]]:
+        """Return mean and practical scale used by the session context guard."""
+
+        result: dict[str, tuple[float, float]] = {}
+        for name in ATTENTION_CONTEXT_SCALE_FLOORS:
+            if name not in self.feature_names:
+                continue
+            index = self.feature_names.index(name)
+            result[name] = (
+                self.feature_means[index],
+                max(
+                    self.feature_scales[index],
+                    ATTENTION_CONTEXT_SCALE_FLOORS[name],
+                ),
+            )
+        return result
+
+    def context_scores(self, features: FeatureVector) -> dict[str, float]:
+        return {
+            name: abs(features.values[name] - mean) / scale
+            for name, (mean, scale) in self.context_statistics().items()
+            if name in features.values
+        }
+
     def evaluate(self, features: FeatureVector) -> SignalValue:
         if features.kind != "attention" or features.version != self.feature_version:
             return SignalValue.unknown(
@@ -204,16 +244,7 @@ class AttentionCalibration:
         missing = [name for name in self.feature_names if name not in features.values]
         if missing:
             return SignalValue.unknown(f"attention features are missing: {missing}")
-        context_scores = []
-        for name in ("face_center_x", "face_center_y", "face_scale"):
-            if name not in self.feature_names or name not in features.values:
-                continue
-            index = self.feature_names.index(name)
-            context_scores.append(
-                abs(features.values[name] - self.feature_means[index])
-                / self.feature_scales[index]
-            )
-        maximum_context_score = max(context_scores, default=0.0)
+        maximum_context_score = max(self.context_scores(features).values(), default=0.0)
         if maximum_context_score > self.maximum_context_z:
             return SignalValue.unknown(
                 "face position or scale is outside the attention calibration envelope",
@@ -222,7 +253,11 @@ class AttentionCalibration:
         x, y = self.predict(features)
         margin = self.allowed_margin
         outside_distance = max(-margin - x, x - (1.0 + margin), -margin - y, y - (1.0 + margin), 0.0)
-        metrics = {"attention_screen_x": x, "attention_screen_y": y}
+        metrics = {
+            "attention_screen_x": x,
+            "attention_screen_y": y,
+            "attention_context_z": maximum_context_score,
+        }
         if outside_distance > 0:
             confidence = min(1.0, 0.55 + outside_distance / max(margin * 2.0, 1e-6))
             return SignalValue.violation(confidence=confidence, **metrics)
@@ -333,7 +368,7 @@ def fit_attention_calibration(
     validation_samples: Sequence[AttentionSample] = (),
     planned_sample_count: int | None = None,
     valid_frame_count: int | None = None,
-    ridge: float = 1e-3,
+    ridge: float = 3.0,
 ) -> AttentionCalibration:
     valid = [sample for sample in samples if sample.features.observable]
     if len(valid) < 9:
@@ -341,7 +376,12 @@ def fit_attention_calibration(
     versions = {sample.features.version for sample in valid}
     if len(versions) != 1:
         raise ValueError("attention calibration samples use mixed feature versions")
-    feature_names = tuple(sorted(set.intersection(*(set(item.features.values) for item in valid))))
+    common_feature_names = set.intersection(
+        *(set(item.features.values) for item in valid)
+    )
+    feature_names = tuple(
+        sorted(common_feature_names - ATTENTION_NON_POSITIONAL_FEATURES)
+    )
     if not feature_names:
         raise ValueError("attention calibration has no common features")
     matrix = np.asarray(

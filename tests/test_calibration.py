@@ -6,11 +6,17 @@ from observer.calibration import (
     ATTENTION_POINTS_9,
     AttentionSample,
     EnvironmentFingerprint,
+    aggregate_attention_samples,
     create_profile,
     fit_attention_calibration,
     fit_posture_calibration,
     load_profile,
     save_profile,
+)
+from observer.calibration_workflow import (
+    ATTENTION_CALIBRATION_POINTS,
+    ATTENTION_VALIDATION_POINTS,
+    _attention_validation_rmse_by_point,
 )
 from observer.observations import SignalState
 from observer.perception import FeatureVector
@@ -86,6 +92,64 @@ class CalibrationTests(unittest.TestCase):
         self.assertIs(inside.state, SignalState.COMPLIANT)
         self.assertIs(outside.state, SignalState.VIOLATION)
 
+    def test_attention_uses_eye_openness_for_observability_not_regression(self) -> None:
+        samples = [
+            AttentionSample(
+                FeatureVector(
+                    "attention",
+                    {
+                        "gaze_x": x,
+                        "gaze_y": y,
+                        "eye_a_open": 0.2 + index * 0.03,
+                        "eye_b_open": 0.7 - index * 0.04,
+                    },
+                ),
+                x,
+                y,
+                point_id,
+            )
+            for index, (point_id, x, y) in enumerate(ATTENTION_POINTS_9)
+        ]
+
+        calibration = fit_attention_calibration(samples)
+
+        self.assertNotIn("eye_a_open", calibration.feature_names)
+        self.assertNotIn("eye_b_open", calibration.feature_names)
+        self.assertEqual(set(calibration.feature_names), {"gaze_x", "gaze_y"})
+
+    def test_attention_validation_diagnostics_report_each_point(self) -> None:
+        samples = attention_samples()
+        calibration = fit_attention_calibration(samples)
+
+        diagnostics = _attention_validation_rmse_by_point(calibration, samples)
+
+        self.assertEqual(set(diagnostics), {sample.point_id for sample in samples})
+        self.assertLess(max(diagnostics.values()), 0.18)
+
+    def test_attention_point_aggregation_uses_feature_medians(self) -> None:
+        samples = [
+            AttentionSample(
+                FeatureVector("attention", {"gaze_x": value, "gaze_y": 0.5}),
+                0.5,
+                0.5,
+                "center",
+            )
+            for value in (0.48, 0.5, 4.0, 0.52, 0.49)
+        ]
+
+        aggregated = aggregate_attention_samples(samples)
+
+        self.assertEqual(len(aggregated), 1)
+        self.assertAlmostEqual(aggregated[0].features.values["gaze_x"], 0.5)
+
+    def test_attention_training_and_validation_points_are_disjoint(self) -> None:
+        training_coordinates = {(x, y) for _point_id, x, y in ATTENTION_CALIBRATION_POINTS}
+        validation_coordinates = {(x, y) for _point_id, x, y in ATTENTION_VALIDATION_POINTS}
+
+        self.assertEqual(len(training_coordinates), 17)
+        self.assertEqual(len(validation_coordinates), 8)
+        self.assertTrue(training_coordinates.isdisjoint(validation_coordinates))
+
     def test_attention_rejects_face_context_far_outside_calibration(self) -> None:
         samples = [
             AttentionSample(
@@ -120,6 +184,43 @@ class CalibrationTests(unittest.TestCase):
         )
         self.assertIs(signal.state, SignalState.UNKNOWN)
         self.assertIn("outside", signal.reason or "")
+
+    def test_attention_context_guard_has_practical_resitting_floor(self) -> None:
+        samples = [
+            AttentionSample(
+                FeatureVector(
+                    "attention",
+                    {
+                        "gaze_x": x,
+                        "gaze_y": y,
+                        "face_center_x": 0.52,
+                        "face_center_y": 0.66,
+                        "face_scale": 0.30,
+                    },
+                ),
+                x,
+                y,
+                point_id,
+            )
+            for point_id, x, y in ATTENTION_POINTS_9
+        ]
+        calibration = fit_attention_calibration(samples)
+
+        signal = calibration.evaluate(
+            FeatureVector(
+                "attention",
+                {
+                    "gaze_x": 0.5,
+                    "gaze_y": 0.5,
+                    "face_center_x": 0.539,
+                    "face_center_y": 0.689,
+                    "face_scale": 0.309,
+                },
+            )
+        )
+
+        self.assertIs(signal.state, SignalState.COMPLIANT)
+        self.assertLessEqual(signal.metrics.get("attention_context_z", 0.0), 5.0)
 
     def test_profile_roundtrip_and_environment_guard(self) -> None:
         posture = fit_posture_calibration(

@@ -96,6 +96,7 @@ class BatchManifest:
     model_manifest_sha256: str
     calibration_profile_id: str
     environment: Mapping[str, Any]
+    alignment: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.dataset_role not in DATASET_ROLES:
@@ -112,6 +113,8 @@ class SignalMetrics:
     true_negative: int
     false_negative: int
     unknown_predictions: int
+    expected_unknown_trials: int
+    expected_unknown_failures: int
     precision: float
     recall: float
     f1: float
@@ -166,6 +169,10 @@ def summarize_trials(records: Sequence[TrialRecord], signal_name: str) -> Signal
         record.truth_state == positive and record.predicted_state != positive for record in valid
     )
     unknown = sum(record.predicted_state in unknown_states for record in valid)
+    expected_unknown = [record for record in valid if record.truth_state in unknown_states]
+    expected_unknown_failures = sum(
+        record.predicted_state != record.truth_state for record in expected_unknown
+    )
     precision_value = tp / (tp + fp) if tp + fp else 0.0
     recall_value = tp / (tp + fn) if tp + fn else 0.0
     f1_value = (
@@ -198,6 +205,8 @@ def summarize_trials(records: Sequence[TrialRecord], signal_name: str) -> Signal
         true_negative=tn,
         false_negative=fn,
         unknown_predictions=unknown,
+        expected_unknown_trials=len(expected_unknown),
+        expected_unknown_failures=expected_unknown_failures,
         precision=precision_value,
         recall=recall_value,
         f1=f1_value,
@@ -289,6 +298,7 @@ def new_batch_manifest(
     model_manifest_sha256: str,
     calibration_profile_id: str,
     environment: Mapping[str, Any],
+    alignment: Mapping[str, Any] | None = None,
 ) -> BatchManifest:
     return BatchManifest(
         batch_id=batch_id,
@@ -299,6 +309,7 @@ def new_batch_manifest(
         model_manifest_sha256=model_manifest_sha256,
         calibration_profile_id=calibration_profile_id,
         environment=dict(environment),
+        alignment=dict(alignment or {}),
     )
 
 
