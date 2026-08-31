@@ -4,6 +4,8 @@ from pathlib import Path
 
 from observer.calibration import (
     ATTENTION_POINTS_9,
+    AttentionCalibration,
+    AttentionSessionBaseline,
     AttentionSample,
     EnvironmentFingerprint,
     aggregate_attention_samples,
@@ -240,7 +242,7 @@ class CalibrationTests(unittest.TestCase):
                     "gaze_y": 0.5,
                     "face_center_x": 0.52,
                     "face_center_y": 0.66,
-                    "face_scale": 0.317,
+                    "face_scale": 0.324,
                 },
             )
         )
@@ -248,6 +250,90 @@ class CalibrationTests(unittest.TestCase):
         self.assertLessEqual(
             practical_scale_shift.metrics.get("attention_context_z", 0.0), 5.0
         )
+
+    def test_zero_weight_context_aligns_but_does_not_reject_look_away(self) -> None:
+        calibration = AttentionCalibration(
+            feature_version="observer-c1-v1",
+            feature_names=("iris_a_x", "face_center_x", "face_center_y", "face_scale"),
+            feature_means=(0.5, 0.5, 0.5, 0.3),
+            feature_scales=(0.1, 0.004, 0.006, 0.005),
+            coefficients_x=(0.5, 1.0, 0.0, 0.0, 0.0),
+            coefficients_y=(0.5, 0.0, 0.0, 0.0, 0.0),
+            training_rmse=0.1,
+            validation_rmse=0.1,
+            valid_sample_count=9,
+            coverage=1.0,
+        )
+        features = FeatureVector(
+            "attention",
+            {
+                "iris_a_x": 0.5,
+                "face_center_x": 0.8,
+                "face_center_y": 0.8,
+                "face_scale": 0.5,
+            },
+        )
+
+        signal = calibration.evaluate(features)
+
+        self.assertIs(signal.state, SignalState.COMPLIANT)
+        self.assertGreater(signal.metrics["attention_context_z"], 5.0)
+
+    def test_session_head_pose_recovers_attention_when_iris_is_unreliable(self) -> None:
+        calibration = AttentionCalibration(
+            feature_version="observer-c1-v1",
+            feature_names=("iris_a_x",),
+            feature_means=(0.5,),
+            feature_scales=(0.1,),
+            coefficients_x=(0.5, 0.1),
+            coefficients_y=(0.5, 0.0),
+            training_rmse=0.1,
+            validation_rmse=0.1,
+            valid_sample_count=9,
+            coverage=1.0,
+        )
+        baseline = AttentionSessionBaseline(0.0, 0.2)
+        features = FeatureVector(
+            "attention",
+            {
+                "iris_a_x": 0.5,
+                "head_yaw_proxy": 0.25,
+                "head_pitch_proxy": 0.21,
+            },
+            reasons=("eyes closed or eye landmarks unreliable",),
+        )
+
+        signal = calibration.evaluate_with_session_baseline(features, baseline)
+
+        self.assertIs(signal.state, SignalState.VIOLATION)
+        self.assertAlmostEqual(signal.metrics["attention_head_yaw_delta"], 0.25)
+
+    def test_session_head_pose_keeps_small_natural_motion_compliant(self) -> None:
+        calibration = AttentionCalibration(
+            feature_version="observer-c1-v1",
+            feature_names=("iris_a_x",),
+            feature_means=(0.5,),
+            feature_scales=(0.1,),
+            coefficients_x=(0.5, 0.1),
+            coefficients_y=(0.5, 0.0),
+            training_rmse=0.1,
+            validation_rmse=0.1,
+            valid_sample_count=9,
+            coverage=1.0,
+        )
+        signal = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "iris_a_x": 0.5,
+                    "head_yaw_proxy": 0.04,
+                    "head_pitch_proxy": 0.23,
+                },
+            ),
+            AttentionSessionBaseline(0.0, 0.2),
+        )
+
+        self.assertIs(signal.state, SignalState.COMPLIANT)
 
     def test_profile_roundtrip_and_environment_guard(self) -> None:
         posture = fit_posture_calibration(

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from observer.calibration import CalibrationProfile
+from observer.calibration import AttentionSessionBaseline, CalibrationProfile
 from observer.config import InferenceConfig
 from observer.fusion import ObservationFusion
 from observer.models import ModelFiles
@@ -130,6 +130,7 @@ class MediapipeVisionProbe:
         self.measurements = VisionProbeMeasurements()
         self._fusion = ObservationFusion()
         self._calibration = calibration
+        self._attention_session_baseline: AttentionSessionBaseline | None = None
         self._quality_thresholds = calibration.quality if calibration else QualityThresholds()
         self._last_quality: FrameQuality | None = None
         self._last_attention_features: FeatureVector | None = None
@@ -217,8 +218,9 @@ class MediapipeVisionProbe:
             elif self._calibration is None:
                 attention_signal = self._unknown_signal("attention calibration not available")
             else:
-                attention_signal = self._calibration.attention.evaluate(
-                    self._last_smoothed_attention_features
+                attention_signal = self._calibration.attention.evaluate_with_session_baseline(
+                    self._last_smoothed_attention_features,
+                    self._attention_session_baseline,
                 )
             self._fusion.update_attention(now_monotonic, attention_signal)
             self._next_due["face"] = now_monotonic + 1.0 / self._rates.face_fps
@@ -340,6 +342,19 @@ class MediapipeVisionProbe:
 
     def summary(self) -> dict[str, Any]:
         return self.measurements.summary()
+
+    def set_attention_session_baseline(self, features: FeatureVector) -> None:
+        required = {"head_yaw_proxy", "head_pitch_proxy"}
+        if features.kind != "attention" or not required.issubset(features.values):
+            raise ValueError("attention session baseline needs head yaw and pitch")
+        self._attention_session_baseline = AttentionSessionBaseline(
+            head_yaw_proxy=features.values["head_yaw_proxy"],
+            head_pitch_proxy=features.values["head_pitch_proxy"],
+        )
+
+    @property
+    def attention_session_baseline(self) -> AttentionSessionBaseline | None:
+        return self._attention_session_baseline
 
     @property
     def latest_quality(self) -> FrameQuality | None:

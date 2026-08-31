@@ -109,6 +109,7 @@ class AlignmentResult:
     elapsed_seconds: float
     final_context_z: float
     posture_state: str
+    attention_session_baseline: dict[str, float] = field(default_factory=dict)
     frames_saved: int = 0
     verification: dict[str, Any] = field(default_factory=dict)
 
@@ -301,6 +302,10 @@ def guide_alignment(
     alignment_reason_counts: dict[str, int] = {}
     posture_state_counts: dict[str, int] = {}
     posture_metric_values: dict[str, list[float]] = {}
+    baseline_values: dict[str, list[float]] = {
+        "head_yaw_proxy": [],
+        "head_pitch_proxy": [],
+    }
     while True:
         now = time.monotonic()
         if now - started >= timeout_seconds:
@@ -384,6 +389,17 @@ def guide_alignment(
         held_seconds, complete = stability.update(
             now, None if indeterminate else final_assessment.aligned
         )
+        if final_assessment.aligned:
+            features = probe.latest_smoothed_attention_features
+            if features is not None and {
+                "head_yaw_proxy",
+                "head_pitch_proxy",
+            }.issubset(features.values):
+                for name in baseline_values:
+                    baseline_values[name].append(features.values[name])
+        elif held_seconds == 0.0:
+            for values in baseline_values.values():
+                values.clear()
         longest_stable_seconds = max(longest_stable_seconds, held_seconds)
         if final_assessment.context_z is not None and (
             best_assessment is None
@@ -401,12 +417,21 @@ def guide_alignment(
         cv2.imshow(window, preview)
         _check_cancel(cv2.waitKeyEx(1))
         if complete and final_assessment.context_z is not None:
+            if not all(baseline_values.values()):
+                raise RuntimeError("aligned session did not capture a head-pose baseline")
+            baseline = {
+                name: median(values) for name, values in baseline_values.items()
+            }
+            probe.set_attention_session_baseline(
+                FeatureVector("attention", baseline)
+            )
             return AlignmentResult(
                 profile_id=profile.profile_id,
                 stable_seconds=stable_seconds,
                 elapsed_seconds=round(now - started, 3),
                 final_context_z=round(final_assessment.context_z, 3),
                 posture_state=final_assessment.posture_state.value,
+                attention_session_baseline=baseline,
             )
 
 

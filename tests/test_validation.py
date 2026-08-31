@@ -5,8 +5,14 @@ from pathlib import Path
 
 import numpy as np
 
-from observer.live_validation import SCENARIOS, Scenario, scenario_accepted_states
-from observer.observations import SignalState
+from observer.live_validation import (
+    SCENARIOS,
+    Scenario,
+    attention_direction_matches,
+    scenario_accepted_states,
+    scenario_validation_signal,
+)
+from observer.observations import SignalState, SignalValue
 from observer.validation import (
     ErrorEvidenceStore,
     EvidencePolicy,
@@ -57,6 +63,64 @@ class ValidationTests(unittest.TestCase):
         self.assertIn(SignalState.COMPLIANT, accepted)
         self.assertIn(SignalState.UNKNOWN, accepted)
         self.assertNotIn(SignalState.VIOLATION, accepted)
+
+    def test_directional_attention_requires_requested_direction(self) -> None:
+        desk = next(
+            scenario for scenario in SCENARIOS if scenario.scenario_id == "attention_desk"
+        )
+        right_only = SignalValue.violation(
+            0.9,
+            attention_head_yaw_delta=-0.30,
+            attention_head_pitch_delta=0.01,
+            attention_screen_x=1.2,
+            attention_screen_y=0.5,
+        )
+
+        self.assertFalse(attention_direction_matches(desk, right_only))
+        self.assertIs(
+            scenario_validation_signal(desk, right_only).state,
+            SignalState.COMPLIANT,
+        )
+
+    def test_directional_attention_accepts_matching_head_evidence(self) -> None:
+        left = next(
+            scenario
+            for scenario in SCENARIOS
+            if scenario.scenario_id == "attention_outside_left"
+        )
+        left_turn = SignalValue.violation(
+            0.8,
+            attention_head_yaw_delta=0.25,
+            attention_head_pitch_delta=0.01,
+            attention_screen_x=0.4,
+            attention_screen_y=0.5,
+        )
+
+        self.assertTrue(attention_direction_matches(left, left_turn))
+        self.assertIs(
+            scenario_validation_signal(left, left_turn).state,
+            SignalState.VIOLATION,
+        )
+
+    def test_directional_attention_rejects_near_edge_early_trigger(self) -> None:
+        right = next(
+            scenario
+            for scenario in SCENARIOS
+            if scenario.scenario_id == "attention_outside_right"
+        )
+        near_edge = SignalValue.violation(
+            0.6,
+            attention_head_yaw_delta=-0.18,
+            attention_head_pitch_delta=0.01,
+            attention_screen_x=1.05,
+            attention_screen_y=0.5,
+        )
+
+        self.assertFalse(attention_direction_matches(right, near_edge))
+        self.assertIs(
+            scenario_validation_signal(right, near_edge).state,
+            SignalState.COMPLIANT,
+        )
 
     def test_manifest_records_same_session_alignment(self) -> None:
         manifest = new_batch_manifest(

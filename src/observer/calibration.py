@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from observer.observations import SignalValue
+from observer.observations import SignalState, SignalValue
 from observer.perception import FeatureVector, QualityThresholds
 
 
@@ -90,9 +90,14 @@ ATTENTION_CONTEXT_SCALE_FLOORS: Mapping[str, float] = {
     "face_center_y": 0.006,
     # A person cannot reliably reproduce the sub-percent scale variation seen
     # within one calibration capture. At the default 5 z guard this permits
-    # about +/-0.0175 normalized scale (roughly +/-5.8% around a 0.30 face).
-    "face_scale": 0.0035,
+    # about +/-0.025 normalized scale (roughly +/-8.3% around a 0.30 face).
+    "face_scale": 0.005,
 }
+
+# Head proxies are normalized by facial geometry. They supplement iris gaze
+# only after a neutral baseline has been captured in the same camera session.
+ATTENTION_HEAD_YAW_DELTA_THRESHOLD = 0.22
+ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD = 0.07
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +160,18 @@ class PostureCalibration:
         if outside >= self.minimum_groups_outside or corroborated_lateral_lean:
             return SignalValue.violation(confidence=confidence, **metrics)
         return SignalValue.compliant(confidence=1.0 - min(confidence, 0.49), **metrics)
+
+
+@dataclass(frozen=True, slots=True)
+class AttentionSessionBaseline:
+    head_yaw_proxy: float
+    head_pitch_proxy: float
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.head_yaw_proxy) or not math.isfinite(
+            self.head_pitch_proxy
+        ):
+            raise ValueError("attention session baseline must be finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +267,24 @@ class AttentionCalibration:
             if name in features.values
         }
 
+    def predictive_context_scores(self, features: FeatureVector) -> dict[str, float]:
+        """Return guards only for context inputs that can move the prediction.
+
+        A zero-weight context input remains available to the pre-session
+        alignment check, but must not invalidate a deliberate look-away action
+        merely because that action moves the face in the camera frame.
+        """
+
+        scores = self.context_scores(features)
+        return {
+            name: score
+            for name, score in scores.items()
+            if (
+                abs(self.coefficients_x[self.feature_names.index(name) + 1]) > 1e-12
+                or abs(self.coefficients_y[self.feature_names.index(name) + 1]) > 1e-12
+            )
+        }
+
     def evaluate(self, features: FeatureVector) -> SignalValue:
         if features.kind != "attention" or features.version != self.feature_version:
             return SignalValue.unknown(
@@ -260,8 +295,12 @@ class AttentionCalibration:
         missing = [name for name in self.feature_names if name not in features.values]
         if missing:
             return SignalValue.unknown(f"attention features are missing: {missing}")
-        maximum_context_score = max(self.context_scores(features).values(), default=0.0)
-        if maximum_context_score > self.maximum_context_z:
+        context_scores = self.context_scores(features)
+        maximum_context_score = max(context_scores.values(), default=0.0)
+        maximum_predictive_context_score = max(
+            self.predictive_context_scores(features).values(), default=0.0
+        )
+        if maximum_predictive_context_score > self.maximum_context_z:
             return SignalValue.unknown(
                 "face position or scale is outside the attention calibration envelope",
                 attention_context_z=maximum_context_score,
@@ -280,6 +319,40 @@ class AttentionCalibration:
         edge_distance = min(x + margin, 1.0 + margin - x, y + margin, 1.0 + margin - y)
         confidence = min(1.0, max(0.51, edge_distance / max(0.5 + margin, 1e-6)))
         return SignalValue.compliant(confidence=confidence, **metrics)
+
+    def evaluate_with_session_baseline(
+        self,
+        features: FeatureVector,
+        baseline: AttentionSessionBaseline | None,
+    ) -> SignalValue:
+        """Fuse calibrated iris gaze with same-session relative head motion."""
+
+        gaze_signal = self.evaluate(features)
+        if baseline is None or not {
+            "head_yaw_proxy",
+            "head_pitch_proxy",
+        }.issubset(features.values):
+            return gaze_signal
+
+        yaw_delta = features.values["head_yaw_proxy"] - baseline.head_yaw_proxy
+        pitch_delta = features.values["head_pitch_proxy"] - baseline.head_pitch_proxy
+        metrics = {
+            **gaze_signal.metrics,
+            "attention_head_yaw_delta": yaw_delta,
+            "attention_head_pitch_delta": pitch_delta,
+        }
+        yaw_ratio = abs(yaw_delta) / ATTENTION_HEAD_YAW_DELTA_THRESHOLD
+        pitch_ratio = pitch_delta / ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD
+        if yaw_ratio >= 1.0 or pitch_ratio >= 1.0:
+            confidence = min(1.0, 0.55 + 0.25 * (max(yaw_ratio, pitch_ratio) - 1.0))
+            return SignalValue.violation(confidence=confidence, **metrics)
+        if gaze_signal.state is SignalState.COMPLIANT:
+            return SignalValue.compliant(gaze_signal.confidence, **metrics)
+        if gaze_signal.state is SignalState.VIOLATION:
+            return SignalValue.violation(gaze_signal.confidence, **metrics)
+        return SignalValue.unknown(
+            gaze_signal.reason or "attention is not observable", **metrics
+        )
 
 
 @dataclass(frozen=True, slots=True)

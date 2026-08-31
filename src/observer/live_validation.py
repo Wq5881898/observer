@@ -13,7 +13,11 @@ from uuid import uuid4
 import numpy as np
 
 from observer.alignment import guide_alignment
-from observer.calibration import load_profile
+from observer.calibration import (
+    ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD,
+    ATTENTION_HEAD_YAW_DELTA_THRESHOLD,
+    load_profile,
+)
 from observer.calibration_workflow import current_environment
 from observer.camera import CameraWorker
 from observer.config import AppConfig
@@ -106,6 +110,7 @@ class ValidationCancelled(RuntimeError):
 
 TRIAL_PREPARE_SECONDS = 1.0
 TARGET_READY_SECONDS = 0.6
+ATTENTION_DIRECTION_SCREEN_MARGIN = 0.08
 
 
 def scenario_catalog() -> list[dict[str, Any]]:
@@ -121,6 +126,67 @@ def scenario_catalog() -> list[dict[str, Any]]:
 
 def scenario_accepted_states(scenario: Scenario) -> tuple[SignalState, ...]:
     return scenario.accepted_states or (scenario.truth_state,)
+
+
+_DIRECTIONAL_ATTENTION_SCENARIOS = {
+    "attention_outside_left",
+    "attention_outside_right",
+    "attention_desk",
+}
+
+
+def attention_direction_matches(scenario: Scenario, signal: SignalValue) -> bool:
+    """Require the requested direction, not merely any attention violation."""
+
+    metrics = signal.metrics
+    yaw = metrics.get("attention_head_yaw_delta")
+    pitch = metrics.get("attention_head_pitch_delta")
+    screen_x = metrics.get("attention_screen_x")
+    screen_y = metrics.get("attention_screen_y")
+    if scenario.scenario_id == "attention_outside_left":
+        return (yaw is not None and yaw >= ATTENTION_HEAD_YAW_DELTA_THRESHOLD) or (
+            screen_x is not None
+            and screen_x < -ATTENTION_DIRECTION_SCREEN_MARGIN
+        )
+    if scenario.scenario_id == "attention_outside_right":
+        return (yaw is not None and yaw <= -ATTENTION_HEAD_YAW_DELTA_THRESHOLD) or (
+            screen_x is not None
+            and screen_x > 1.0 + ATTENTION_DIRECTION_SCREEN_MARGIN
+        )
+    if scenario.scenario_id == "attention_desk":
+        return (
+            pitch is not None
+            and pitch >= ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD
+        ) or (
+            screen_y is not None and screen_y > 1.0
+        )
+    return signal.state in scenario_accepted_states(scenario)
+
+
+def scenario_validation_signal(scenario: Scenario, signal: SignalValue) -> SignalValue:
+    """Convert the binary production signal into a direction-specific test signal."""
+
+    if scenario.scenario_id not in _DIRECTIONAL_ATTENTION_SCENARIOS:
+        return signal
+    if signal.state is SignalState.UNKNOWN:
+        return signal
+    if attention_direction_matches(scenario, signal):
+        return SignalValue.violation(signal.confidence, **signal.metrics)
+    return SignalValue.compliant(signal.confidence, **signal.metrics)
+
+
+def attention_direction_status(signal: SignalValue) -> str:
+    metrics = signal.metrics
+    values = []
+    for label, name in (
+        ("yaw", "attention_head_yaw_delta"),
+        ("pitch", "attention_head_pitch_delta"),
+        ("x", "attention_screen_x"),
+        ("y", "attention_screen_y"),
+    ):
+        if name in metrics:
+            values.append(f"{label}={metrics[name]:+.2f}")
+    return "  ".join(values) or "direction evidence unavailable"
 
 
 def run_live_validation(
@@ -965,9 +1031,10 @@ def _await_ready(
         else:
             last_sequence = snapshot.sequence
             probe.process_due(snapshot.frame, snapshot.captured_monotonic)
-            signal = probe.observation(snapshot.captured_monotonic).signal(
+            raw_signal = probe.observation(snapshot.captured_monotonic).signal(
                 scenario.signal_name
             )
+            signal = scenario_validation_signal(scenario, raw_signal)
             current_state = signal.state
             target_matches = current_state in scenario_accepted_states(scenario)
             if target_matches:
@@ -991,6 +1058,9 @@ def _await_ready(
                     f"{scenario.scenario_id} ({repetition}/{repetitions})",
                     scenario.instruction,
                     f"TARGET: {accepted}   CURRENT: {current_state.value}",
+                    attention_direction_status(raw_signal)
+                    if scenario.scenario_id in _DIRECTIONAL_ATTENTION_SCENARIOS
+                    else "",
                     (
                         "TARGET READY - press SPACE to sample"
                         if target_ready
@@ -1029,9 +1099,11 @@ def _run_prepare_countdown(
         else:
             last_sequence = snapshot.sequence
             probe.process_due(snapshot.frame, snapshot.captured_monotonic)
-            current_state = probe.observation(snapshot.captured_monotonic).signal(
+            raw_signal = probe.observation(snapshot.captured_monotonic).signal(
                 scenario.signal_name
-            ).state
+            )
+            signal = scenario_validation_signal(scenario, raw_signal)
+            current_state = signal.state
             target_matches = current_state in scenario_accepted_states(scenario)
             canvas = _scenario_canvas(snapshot.frame, scenario)
             remaining = max(0.0, duration_seconds - (time.monotonic() - started))
@@ -1042,6 +1114,9 @@ def _run_prepare_countdown(
                     f"PREPARE NOW - recording starts in {remaining:0.1f}s",
                     f"CURRENT: {current_state.value}   "
                     f"TARGET: {'MATCHED' if target_matches else 'NOT MATCHED'}",
+                    attention_direction_status(raw_signal)
+                    if scenario.scenario_id in _DIRECTIONAL_ATTENTION_SCENARIOS
+                    else "",
                     f"Complete the action, then hold it for {scenario.duration_seconds:g}s   ESC=cancel",
                 ),
             )
@@ -1081,7 +1156,10 @@ def _run_trial(
             continue
         last_sequence = snapshot.sequence
         probe.process_due(snapshot.frame, snapshot.captured_monotonic)
-        signal = probe.observation(snapshot.captured_monotonic).signal(scenario.signal_name)
+        raw_signal = probe.observation(snapshot.captured_monotonic).signal(
+            scenario.signal_name
+        )
+        signal = scenario_validation_signal(scenario, raw_signal)
         states.append(signal)
         runs = (
             probe.measurements.face.runs,
@@ -1096,6 +1174,7 @@ def _run_trial(
                     "captured_monotonic": snapshot.captured_monotonic,
                     "signal_name": scenario.signal_name,
                     "signal_state": signal.state.value,
+                    "raw_signal_state": raw_signal.state.value,
                 }
             )
             derived_records.append(derived)
@@ -1113,6 +1192,9 @@ def _run_trial(
                 f"Sampling {remaining:0.1f}s - no video saved",
                 f"CURRENT: {signal.state.value}   "
                 f"TARGET: {'MAINTAINED' if target_matches else 'LOST - still recorded'}",
+                attention_direction_status(raw_signal)
+                if scenario.scenario_id in _DIRECTIONAL_ATTENTION_SCENARIOS
+                else "",
             ),
         )
         cv2.imshow(window, canvas)
