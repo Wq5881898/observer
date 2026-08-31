@@ -14,7 +14,9 @@ import numpy as np
 
 from observer.alignment import guide_alignment
 from observer.calibration import (
+    ATTENTION_GAZE_DOWN_BOUNDARY,
     ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD,
+    ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD,
     ATTENTION_HEAD_YAW_DELTA_THRESHOLD,
     load_profile,
 )
@@ -68,6 +70,8 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("attention_outside_left", "attention_away", SignalState.VIOLATION, "Look beyond the left screen edge"),
     Scenario("attention_outside_right", "attention_away", SignalState.VIOLATION, "Look beyond the right screen edge"),
     Scenario("attention_desk", "attention_away", SignalState.VIOLATION, "Look down at the desk"),
+    Scenario("attention_desk_control_side", "attention_away", SignalState.COMPLIANT, "Turn clearly to either side but keep your gaze level", duration_seconds=6.0, repetitions=1),
+    Scenario("attention_desk_control_chin", "attention_away", SignalState.COMPLIANT, "Lower your chin slightly but keep looking at the screen", duration_seconds=6.0, repetitions=1),
     Scenario("attention_eyes_covered", "attention_away", SignalState.UNKNOWN, "Cover or close both eyes", repetitions=3),
 )
 
@@ -132,6 +136,8 @@ _DIRECTIONAL_ATTENTION_SCENARIOS = {
     "attention_outside_left",
     "attention_outside_right",
     "attention_desk",
+    "attention_desk_control_side",
+    "attention_desk_control_chin",
 }
 
 
@@ -153,13 +159,21 @@ def attention_direction_matches(scenario: Scenario, signal: SignalValue) -> bool
             screen_x is not None
             and screen_x > 1.0 + ATTENTION_DIRECTION_SCREEN_MARGIN
         )
-    if scenario.scenario_id == "attention_desk":
-        return (
+    if scenario.scenario_id.startswith("attention_desk"):
+        horizontal_is_not_dominant = (
+            yaw is None or abs(yaw) < ATTENTION_HEAD_YAW_DELTA_THRESHOLD
+        )
+        combined_down = (
             pitch is not None
             and pitch >= ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD
-        ) or (
-            screen_y is not None and screen_y > 1.0
+            and screen_y is not None
+            and screen_y > ATTENTION_GAZE_DOWN_BOUNDARY
         )
+        strong_down = (
+            pitch is not None
+            and pitch >= ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD
+        )
+        return horizontal_is_not_dominant and (combined_down or strong_down)
     return signal.state in scenario_accepted_states(scenario)
 
 

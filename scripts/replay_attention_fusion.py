@@ -54,6 +54,9 @@ def main() -> int:
     )
 
     counts: dict[str, Counter[str]] = defaultdict(Counter)
+    metric_values: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for record in records:
         trial_id = str(record["trial_id"])
         scenario_id = scenario_by_trial[trial_id]
@@ -67,6 +70,17 @@ def main() -> int:
         )
         signal = scenario_validation_signal(scenario_by_id[scenario_id], raw_signal)
         counts[scenario_id][signal.state.value] += 1
+        for name, value in raw_signal.metrics.items():
+            metric_values[scenario_id][name].append(float(value))
+
+    def distribution(values: list[float]) -> dict[str, float]:
+        ordered = sorted(values)
+        return {
+            "minimum": ordered[0],
+            "p10": ordered[int((len(ordered) - 1) * 0.10)],
+            "median": median(ordered),
+            "maximum": ordered[-1],
+        }
 
     print(
         json.dumps(
@@ -76,7 +90,13 @@ def main() -> int:
                     "head_pitch_proxy": baseline.head_pitch_proxy,
                 },
                 "scenarios": {
-                    scenario_id: dict(state_counts)
+                    scenario_id: {
+                        "states": dict(state_counts),
+                        "metrics": {
+                            name: distribution(values)
+                            for name, values in metric_values[scenario_id].items()
+                        },
+                    }
                     for scenario_id, state_counts in counts.items()
                 },
             },

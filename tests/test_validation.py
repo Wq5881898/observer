@@ -82,6 +82,34 @@ class ValidationTests(unittest.TestCase):
             SignalState.COMPLIANT,
         )
 
+        false_vertical_from_turn = SignalValue.violation(
+            0.9,
+            attention_head_yaw_delta=-0.50,
+            attention_head_pitch_delta=0.05,
+            attention_screen_x=0.23,
+            attention_screen_y=1.17,
+        )
+        small_chin_drop = SignalValue.violation(
+            0.7,
+            attention_head_yaw_delta=-0.03,
+            attention_head_pitch_delta=0.09,
+            attention_screen_x=0.20,
+            attention_screen_y=0.34,
+        )
+
+        self.assertFalse(attention_direction_matches(desk, false_vertical_from_turn))
+        self.assertFalse(attention_direction_matches(desk, small_chin_drop))
+
+        side_control = next(
+            scenario
+            for scenario in SCENARIOS
+            if scenario.scenario_id == "attention_desk_control_side"
+        )
+        self.assertIs(
+            scenario_validation_signal(side_control, false_vertical_from_turn).state,
+            SignalState.COMPLIANT,
+        )
+
     def test_directional_attention_accepts_matching_head_evidence(self) -> None:
         left = next(
             scenario

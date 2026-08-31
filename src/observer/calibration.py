@@ -98,6 +98,8 @@ ATTENTION_CONTEXT_SCALE_FLOORS: Mapping[str, float] = {
 # only after a neutral baseline has been captured in the same camera session.
 ATTENTION_HEAD_YAW_DELTA_THRESHOLD = 0.22
 ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD = 0.07
+ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD = 0.14
+ATTENTION_GAZE_DOWN_BOUNDARY = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,14 +344,45 @@ class AttentionCalibration:
             "attention_head_pitch_delta": pitch_delta,
         }
         yaw_ratio = abs(yaw_delta) / ATTENTION_HEAD_YAW_DELTA_THRESHOLD
-        pitch_ratio = pitch_delta / ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD
-        if yaw_ratio >= 1.0 or pitch_ratio >= 1.0:
-            confidence = min(1.0, 0.55 + 0.25 * (max(yaw_ratio, pitch_ratio) - 1.0))
+        screen_x = gaze_signal.metrics.get("attention_screen_x")
+        screen_y = gaze_signal.metrics.get("attention_screen_y")
+        horizontal_gaze_away = screen_x is not None and (
+            screen_x < -self.allowed_margin or screen_x > 1.0 + self.allowed_margin
+        )
+        upward_gaze_away = (
+            screen_y is not None and screen_y < -self.allowed_margin
+        )
+        combined_down_away = (
+            pitch_delta >= ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD
+            and screen_y is not None
+            and screen_y > ATTENTION_GAZE_DOWN_BOUNDARY
+        )
+        strong_down_away = (
+            pitch_delta >= ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD
+        )
+        head_or_directional_gaze_away = (
+            yaw_ratio >= 1.0
+            or horizontal_gaze_away
+            or upward_gaze_away
+            or combined_down_away
+            or strong_down_away
+        )
+        if head_or_directional_gaze_away:
+            pitch_ratio = max(
+                pitch_delta / ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD,
+                0.0,
+            )
+            confidence = min(
+                1.0, 0.55 + 0.25 * (max(yaw_ratio, pitch_ratio) - 1.0)
+            )
             return SignalValue.violation(confidence=confidence, **metrics)
         if gaze_signal.state is SignalState.COMPLIANT:
             return SignalValue.compliant(gaze_signal.confidence, **metrics)
         if gaze_signal.state is SignalState.VIOLATION:
-            return SignalValue.violation(gaze_signal.confidence, **metrics)
+            # A downward-only iris extrapolation is not sufficient: horizontal
+            # head turns can create a false vertical prediction. The combined
+            # and strong-down cases were handled above.
+            return SignalValue.compliant(confidence=0.51, **metrics)
         return SignalValue.unknown(
             gaze_signal.reason or "attention is not observable", **metrics
         )

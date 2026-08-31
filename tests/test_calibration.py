@@ -335,6 +335,59 @@ class CalibrationTests(unittest.TestCase):
 
         self.assertIs(signal.state, SignalState.COMPLIANT)
 
+    def test_down_attention_requires_pitch_and_gaze_agreement(self) -> None:
+        calibration = AttentionCalibration(
+            feature_version="observer-c1-v1",
+            feature_names=("iris_a_y",),
+            feature_means=(0.5,),
+            feature_scales=(0.1,),
+            coefficients_x=(0.5, 0.0),
+            coefficients_y=(0.5, 0.1),
+            training_rmse=0.1,
+            validation_rmse=0.1,
+            valid_sample_count=9,
+            coverage=1.0,
+        )
+        baseline = AttentionSessionBaseline(0.0, 0.2)
+
+        horizontal_turn_false_y = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "iris_a_y": 1.17,
+                    "head_yaw_proxy": -0.10,
+                    "head_pitch_proxy": 0.25,
+                },
+            ),
+            baseline,
+        )
+        small_chin_drop = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "iris_a_y": 0.34,
+                    "head_yaw_proxy": -0.03,
+                    "head_pitch_proxy": 0.29,
+                },
+            ),
+            baseline,
+        )
+        real_down = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "iris_a_y": 1.17,
+                    "head_yaw_proxy": -0.03,
+                    "head_pitch_proxy": 0.29,
+                },
+            ),
+            baseline,
+        )
+
+        self.assertIs(horizontal_turn_false_y.state, SignalState.COMPLIANT)
+        self.assertIs(small_chin_drop.state, SignalState.COMPLIANT)
+        self.assertIs(real_down.state, SignalState.VIOLATION)
+
     def test_profile_roundtrip_and_environment_guard(self) -> None:
         posture = fit_posture_calibration(
             [posture_sample(index) for index in range(40)], planned_sample_count=40
