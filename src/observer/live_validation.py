@@ -87,6 +87,21 @@ BRIEF_AWAY_SCENARIOS: tuple[Scenario, ...] = (
     Scenario("event_brief_recovery", "away", SignalState.COMPLIANT, "Return and sit normally", duration_seconds=4.0, repetitions=1),
 )
 
+PHONE_EVENT_SCENARIOS: tuple[Scenario, ...] = (
+    Scenario("phone_event_normal", "phone_held", SignalState.COMPLIANT, "Work normally without holding the phone", duration_seconds=5.0, repetitions=1),
+    Scenario("phone_event_brief", "phone_held", SignalState.VIOLATION, "Use the phone with one hand for 8s; no alert expected", duration_seconds=8.0, repetitions=1),
+    Scenario("phone_event_brief_recovery", "phone_held", SignalState.COMPLIANT, "Put the phone down and work normally", duration_seconds=4.0, repetitions=1),
+    Scenario("phone_event_sustained", "phone_held", SignalState.VIOLATION, "Use the phone naturally for 15s; alert expected near 10s", duration_seconds=15.0, repetitions=1),
+    Scenario("phone_event_sustained_recovery", "phone_held", SignalState.COMPLIANT, "Put the phone down and work normally", duration_seconds=4.0, repetitions=1),
+    Scenario("phone_event_non_phone", "phone_held", SignalState.COMPLIANT, "Hold the same non-phone object for 12s", duration_seconds=12.0, repetitions=1),
+)
+
+PHONE_EVENT_POSITIVE_SCENARIOS: tuple[Scenario, ...] = tuple(
+    scenario
+    for scenario in PHONE_EVENT_SCENARIOS
+    if scenario.scenario_id not in {"phone_event_normal", "phone_event_non_phone"}
+)
+
 
 class ValidationCancelled(RuntimeError):
     pass
@@ -194,7 +209,7 @@ def run_live_validation(
         for scenario in selected:
             repetitions = repetitions_override or scenario.repetitions
             for repetition in range(1, repetitions + 1):
-                _await_ready(camera, window, scenario, repetition, repetitions)
+                _await_ready(camera, probe, window, scenario, repetition, repetitions)
                 trial_id = str(uuid4())
                 record, error_frame, derived_records, interrupted = _run_trial(
                     camera,
@@ -333,7 +348,7 @@ def run_away_event_validation(
         actions: list[dict[str, Any]] = []
         samples_path = batch_directory / "event_samples.jsonl"
         for scenario in scenarios:
-            _await_ready(camera, window, scenario, 1, 1)
+            _await_ready(camera, probe, window, scenario, 1, 1)
             segment, segment_actions, derived_records, interrupted = _run_event_segment(
                 camera,
                 probe,
@@ -392,6 +407,128 @@ def run_away_event_validation(
         cv2.destroyAllWindows()
 
 
+def run_phone_event_validation(
+    config: AppConfig,
+    models: ModelFiles,
+    profile_path: str | Path,
+    *,
+    dataset_role: str,
+    output_root: str | Path = "data/validation",
+    suite: str = "full",
+) -> Path:
+    """Exercise the configured phone rule in one continuous live session."""
+
+    import cv2
+
+    if suite not in {"full", "positive"}:
+        raise ValueError("phone event suite must be 'full' or 'positive'")
+    scenarios = (
+        PHONE_EVENT_SCENARIOS if suite == "full" else PHONE_EVENT_POSITIVE_SCENARIOS
+    )
+
+    phone_configs = tuple(rule for rule in config.rules if rule.rule_id == "phone_held")
+    if len(phone_configs) != 1 or phone_configs[0].signal_name != "phone_held":
+        raise ValueError("event validation requires exactly one configured phone rule")
+    phone_config = phone_configs[0]
+    if phone_config.trigger_after_seconds >= 15.0:
+        raise ValueError("sustained phone scenario must outlast the configured trigger")
+
+    camera = CameraWorker(config.camera)
+    probe: MediapipeVisionProbe | None = None
+    window = "Observer Stage C phone event validation"
+    sampler = ResourceSampler()
+    resource_samples: list[Any] = []
+    try:
+        if not camera.start():
+            raise RuntimeError(camera.stats.last_error or "camera could not be opened")
+        first = _wait_for_frame(camera)
+        environment = current_environment(config, first.frame.shape)
+        profile = load_profile(profile_path, environment)
+        probe = MediapipeVisionProbe(models, config.inference, profile)
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+        batch_id = (
+            f"event-phone-{suite}-{dataset_role}-"
+            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+            f"{uuid4().hex[:8]}"
+        )
+        batch_directory = Path(output_root) / batch_id
+        batch_directory.mkdir(parents=True, exist_ok=False)
+        manifest = new_batch_manifest(
+            batch_id=batch_id,
+            dataset_role=dataset_role,
+            git_commit=_git_commit(),
+            config_sha256=_config_hash(config),
+            model_manifest_sha256=sha256_file(models.face.parent / "manifest.json"),
+            calibration_profile_id=profile.profile_id,
+            environment=asdict(environment),
+            alignment={
+                "skipped": True,
+                "reason": "phone event validation does not depend on attention alignment",
+                "frames_saved": 0,
+            },
+        )
+        (batch_directory / "manifest.json").write_text(
+            json.dumps(asdict(manifest), indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+
+        engine = RuleEngine((phone_config,))
+        segments: list[dict[str, Any]] = []
+        actions: list[dict[str, Any]] = []
+        samples_path = batch_directory / "event_samples.jsonl"
+        for scenario in scenarios:
+            _await_ready(camera, probe, window, scenario, 1, 1)
+            segment, segment_actions, derived_records, interrupted = _run_event_segment(
+                camera,
+                probe,
+                engine,
+                window,
+                scenario,
+                sampler,
+                resource_samples,
+            )
+            segments.append(segment)
+            actions.extend(segment_actions)
+            _append_jsonl(samples_path, derived_records)
+            if interrupted:
+                raise ValidationCancelled(
+                    f"event validation cancelled during {scenario.scenario_id}"
+                )
+
+        report = evaluate_phone_event_report(
+            segments,
+            actions,
+            trigger_after_seconds=phone_config.trigger_after_seconds,
+            recovery_after_seconds=phone_config.recovery_after_seconds,
+            expected_penalty_points=phone_config.initial_penalty_points,
+            final_score=engine.ledger.score,
+            unknown_grace_seconds=phone_config.unknown_grace_seconds,
+        )
+        report["suite"] = suite
+        for filename, payload in (
+            ("event_segments.json", segments),
+            ("event_actions.json", actions),
+            ("event_report.json", report),
+        ):
+            (batch_directory / filename).write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True),
+                encoding="utf-8",
+            )
+        resources = asdict(summarize_resources(resource_samples, config.resources))
+        (batch_directory / "resources.json").write_text(
+            json.dumps(resources, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        return batch_directory
+    finally:
+        if probe is not None:
+            probe.close()
+        camera.stop()
+        cv2.destroyAllWindows()
+
+
 def _run_event_segment(
     camera: CameraWorker,
     probe: MediapipeVisionProbe,
@@ -407,6 +544,10 @@ def _run_event_segment(
     last_sequence = 0
     last_resource_sample = 0.0
     state_counts = {state.value: 0 for state in SignalState}
+    longest_state_run_seconds = {state.value: 0.0 for state in SignalState}
+    current_state: SignalState | None = None
+    current_state_started: float | None = None
+    current_state_last: float | None = None
     segment_actions: list[dict[str, Any]] = []
     derived_records: list[dict[str, Any]] = []
     previous_runs = (-1, -1, -1)
@@ -421,8 +562,17 @@ def _run_event_segment(
         last_sequence = snapshot.sequence
         probe.process_due(snapshot.frame, snapshot.captured_monotonic)
         observation = probe.observation(snapshot.captured_monotonic)
-        signal = observation.signal("away")
+        signal = observation.signal(scenario.signal_name)
         state_counts[signal.state.value] += 1
+        if signal.state is not current_state:
+            if current_state is not None and current_state_started is not None:
+                run_seconds = (current_state_last or current_state_started) - current_state_started
+                longest_state_run_seconds[current_state.value] = max(
+                    longest_state_run_seconds[current_state.value], run_seconds
+                )
+            current_state = signal.state
+            current_state_started = snapshot.captured_monotonic
+        current_state_last = snapshot.captured_monotonic
         result = engine.process(observation)
         for action in result.actions:
             action_payload = asdict(action)
@@ -459,7 +609,7 @@ def _run_event_segment(
             (
                 scenario.instruction,
                 f"Recording {max(0.0, scenario.duration_seconds - elapsed):0.1f}s",
-                f"away={signal.state.value} actions={recent} score={result.score:0.1f}",
+                f"{scenario.signal_name}={signal.state.value} actions={recent} score={result.score:0.1f}",
             ),
         )
         cv2.imshow(window, canvas)
@@ -472,6 +622,11 @@ def _run_event_segment(
             last_resource_sample = now
 
     ended = time.monotonic()
+    if current_state is not None and current_state_started is not None:
+        run_seconds = (current_state_last or current_state_started) - current_state_started
+        longest_state_run_seconds[current_state.value] = max(
+            longest_state_run_seconds[current_state.value], run_seconds
+        )
     return (
         {
             "scenario_id": scenario.scenario_id,
@@ -481,6 +636,7 @@ def _run_event_segment(
             "ended_monotonic": ended,
             "duration_seconds": ended - started,
             "state_counts": state_counts,
+            "longest_state_run_seconds": longest_state_run_seconds,
             "action_kinds": [action["kind"] for action in segment_actions],
             "interrupted": interrupted,
         },
@@ -668,8 +824,133 @@ def evaluate_brief_away_report(
     }
 
 
+def evaluate_phone_event_report(
+    segments: Sequence[dict[str, Any]],
+    actions: Sequence[dict[str, Any]],
+    *,
+    trigger_after_seconds: float,
+    recovery_after_seconds: float,
+    expected_penalty_points: float,
+    final_score: float,
+    unknown_grace_seconds: float = 3.0,
+) -> dict[str, Any]:
+    """Evaluate brief use, sustained penalty, recovery, and non-phone safety."""
+
+    by_scenario = {segment["scenario_id"]: segment for segment in segments}
+
+    def ratio(scenario_id: str, state: str) -> float:
+        counts = by_scenario[scenario_id]["state_counts"]
+        total = sum(counts.values())
+        return counts.get(state, 0) / total if total else 0.0
+
+    def non_violation_ratio(scenario_id: str) -> float:
+        return ratio(scenario_id, "compliant") + ratio(scenario_id, "unknown")
+
+    def scenario_actions(scenario_id: str) -> list[dict[str, Any]]:
+        return [action for action in actions if action["scenario_id"] == scenario_id]
+
+    def kinds(scenario_id: str) -> list[str]:
+        return [action["kind"] for action in scenario_actions(scenario_id)]
+
+    sustained_actions = scenario_actions("phone_event_sustained")
+    activation = next(
+        (action for action in sustained_actions if action["kind"] == "activated"),
+        None,
+    )
+    activation_delay = (
+        activation["at_monotonic"] - activation["event_started_monotonic"]
+        if activation is not None
+        else None
+    )
+    recovery = next(
+        (
+            action
+            for action in scenario_actions("phone_event_sustained_recovery")
+            if action["kind"] == "resolved"
+            and action.get("reason") in {"recovered", "observation_lost"}
+        ),
+        None,
+    )
+    recovery_delay = (
+        recovery["at_monotonic"]
+        - by_scenario["phone_event_sustained_recovery"]["started_monotonic"]
+        if recovery is not None
+        else None
+    )
+    expected_recovery_delay = (
+        recovery_after_seconds
+        if recovery is not None and recovery.get("reason") == "recovered"
+        else unknown_grace_seconds
+    )
+    penalty_points = sum(
+        action.get("requested_points", 0.0)
+        for action in actions
+        if action["kind"] == "penalty"
+    )
+    forbidden = {"activated", "alert", "penalty"}
+    checks = {
+        "brief_phone_input_valid": by_scenario["phone_event_brief"]
+        .get("longest_state_run_seconds", {})
+        .get("violation", 0.0)
+        >= 3.0,
+        "brief_phone_no_activation": not forbidden.intersection(kinds("phone_event_brief")),
+        "brief_recovery_input_valid": non_violation_ratio("phone_event_brief_recovery") >= 0.8,
+        "sustained_phone_input_valid": ratio("phone_event_sustained", "violation") >= 0.8,
+        "sustained_activated_once": kinds("phone_event_sustained").count("activated") == 1,
+        "sustained_alerted_once": kinds("phone_event_sustained").count("alert") == 1,
+        "sustained_penalized_once": kinds("phone_event_sustained").count("penalty") == 1,
+        "activation_timing_within_1_5s": activation_delay is not None
+        and abs(activation_delay - trigger_after_seconds) <= 1.5,
+        "sustained_recovery_input_valid": non_violation_ratio("phone_event_sustained_recovery") >= 0.8,
+        "recovery_resolved": recovery is not None,
+        "recovery_timing_within_1_5s": recovery_delay is not None
+        and abs(recovery_delay - expected_recovery_delay) <= 1.5,
+        "penalty_points_match": abs(penalty_points - expected_penalty_points) < 1e-6,
+        "final_score_match": abs(final_score - (100.0 - expected_penalty_points)) < 1e-6,
+    }
+    if "phone_event_normal" in by_scenario:
+        checks.update(
+            {
+                "normal_input_valid": non_violation_ratio("phone_event_normal") >= 0.8,
+                "normal_no_activation": not forbidden.intersection(
+                    kinds("phone_event_normal")
+                ),
+            }
+        )
+    if "phone_event_non_phone" in by_scenario:
+        checks.update(
+            {
+                "non_phone_input_valid": non_violation_ratio("phone_event_non_phone")
+                >= 0.8,
+                "non_phone_no_activation": not forbidden.intersection(
+                    kinds("phone_event_non_phone")
+                ),
+            }
+        )
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "trigger_after_seconds": trigger_after_seconds,
+        "recovery_after_seconds": recovery_after_seconds,
+        "activation_delay_seconds": activation_delay,
+        "recovery_delay_seconds": recovery_delay,
+        "recovery_reason": recovery.get("reason") if recovery is not None else None,
+        "expected_recovery_delay_seconds": expected_recovery_delay,
+        "penalty_points": penalty_points,
+        "final_score": final_score,
+        "state_ratios": {
+            scenario_id: {
+                state: ratio(scenario_id, state)
+                for state in ("compliant", "violation", "unknown", "exempt")
+            }
+            for scenario_id in by_scenario
+        },
+    }
+
+
 def _await_ready(
     camera: CameraWorker,
+    probe: MediapipeVisionProbe,
     window: str,
     scenario: Scenario,
     repetition: int,
@@ -684,12 +965,17 @@ def _await_ready(
             key = cv2.waitKey(10)
         else:
             last_sequence = snapshot.sequence
+            probe.process_due(snapshot.frame, snapshot.captured_monotonic)
+            current_state = probe.observation(snapshot.captured_monotonic).signal(
+                scenario.signal_name
+            ).state.value
             canvas = _scenario_canvas(snapshot.frame, scenario)
             _put_lines(
                 canvas,
                 (
                     f"{scenario.scenario_id} ({repetition}/{repetitions})",
                     scenario.instruction,
+                    f"Live check: {scenario.signal_name}={current_state}",
                     "SPACE=begin 3s preparation   ESC=cancel batch",
                 ),
             )
@@ -698,12 +984,15 @@ def _await_ready(
         if key & 0xFF == 27:
             raise ValidationCancelled("validation cancelled by user")
         if key & 0xFF == 32:
-            _run_prepare_countdown(camera, window, scenario, TRIAL_PREPARE_SECONDS)
+            _run_prepare_countdown(
+                camera, probe, window, scenario, TRIAL_PREPARE_SECONDS
+            )
             return
 
 
 def _run_prepare_countdown(
     camera: CameraWorker,
+    probe: MediapipeVisionProbe,
     window: str,
     scenario: Scenario,
     duration_seconds: float,
@@ -718,6 +1007,10 @@ def _run_prepare_countdown(
             key = cv2.waitKey(10)
         else:
             last_sequence = snapshot.sequence
+            probe.process_due(snapshot.frame, snapshot.captured_monotonic)
+            current_state = probe.observation(snapshot.captured_monotonic).signal(
+                scenario.signal_name
+            ).state.value
             canvas = _scenario_canvas(snapshot.frame, scenario)
             remaining = max(0.0, duration_seconds - (time.monotonic() - started))
             _put_lines(
@@ -725,6 +1018,7 @@ def _run_prepare_countdown(
                 (
                     scenario.instruction,
                     f"PREPARE NOW - recording starts in {remaining:0.1f}s",
+                    f"Live check: {scenario.signal_name}={current_state}",
                     f"Complete the action, then hold it for {scenario.duration_seconds:g}s   ESC=cancel",
                 ),
             )

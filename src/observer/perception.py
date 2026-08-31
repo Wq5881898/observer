@@ -174,7 +174,7 @@ class PhoneCandidateTracker:
         *,
         confirmation_hits: int = 2,
         maximum_center_distance: float = 0.18,
-        retain_seconds: float = 0.45,
+        retain_seconds: float = 1.5,
         burst_seconds: float = 2.0,
     ) -> None:
         if confirmation_hits < 1 or min(retain_seconds, burst_seconds) < 0:

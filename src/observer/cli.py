@@ -418,6 +418,43 @@ def _validate_away_events(
     return 0 if report["passed"] else 5
 
 
+def _validate_phone_events(
+    config_path: Path | None,
+    models_dir: Path,
+    profile_path: Path,
+    dataset_role: str,
+    output_root: Path,
+    suite: str,
+) -> int:
+    from observer.live_validation import run_phone_event_validation
+
+    config = load_config(config_path)
+    models = verify_model_directory(models_dir)
+    batch_directory = run_phone_event_validation(
+        config,
+        models,
+        profile_path,
+        dataset_role=dataset_role,
+        output_root=output_root,
+        suite=suite,
+    )
+    report_path = batch_directory / "event_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    print(
+        json.dumps(
+            {
+                "batch_directory": str(batch_directory.resolve()),
+                "report": str(report_path.resolve()),
+                "passed": report["passed"],
+                "frames_saved": 0,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return 0 if report["passed"] else 5
+
+
 def _evidence_purge(index_path: Path, apply: bool) -> int:
     from observer.validation import purge_expired_evidence
 
@@ -522,6 +559,24 @@ def build_parser() -> argparse.ArgumentParser:
     event_parser.add_argument(
         "--output-root", type=Path, default=Path("data/validation")
     )
+    phone_event_parser = subparsers.add_parser(
+        "validate-phone-events",
+        help="run continuous Stage C phone alert, penalty, recovery, and false-positive scenarios",
+    )
+    phone_event_parser.add_argument("--profile", type=Path, required=True)
+    phone_event_parser.add_argument("--models-dir", type=Path, default=Path("models"))
+    phone_event_parser.add_argument(
+        "--role", choices=("tuning", "holdout"), required=True
+    )
+    phone_event_parser.add_argument(
+        "--suite",
+        choices=("full", "positive"),
+        default="full",
+        help="full safety chain or focused phone-positive and recovery retry",
+    )
+    phone_event_parser.add_argument(
+        "--output-root", type=Path, default=Path("data/validation")
+    )
     purge_parser = subparsers.add_parser(
         "evidence-purge", help="dry-run or delete expired Stage C error evidence"
     )
@@ -572,6 +627,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "validate-away-events":
         return _validate_away_events(
+            args.config,
+            args.models_dir,
+            args.profile,
+            args.role,
+            args.output_root,
+            args.suite,
+        )
+    if args.command == "validate-phone-events":
+        return _validate_phone_events(
             args.config,
             args.models_dir,
             args.profile,

@@ -120,6 +120,14 @@ class PerceptionTests(unittest.TestCase):
         self.assertEqual(tracker.update(1.1, (phone,)), (phone,))
         self.assertEqual(tracker.update(1.4, ()), ())
 
+    def test_default_phone_tracker_bridges_one_second_detector_gap(self) -> None:
+        tracker = PhoneCandidateTracker()
+        phone = PhoneCandidate(NormalizedBox(0.4, 0.4, 0.1, 0.2), 0.9)
+        self.assertEqual(tracker.update(1.0, (phone,)), ())
+        self.assertEqual(tracker.update(1.2, (phone,)), (phone,))
+        self.assertEqual(tracker.update(2.3, ()), (phone,))
+        self.assertEqual(tracker.update(2.8, ()), ())
+
     def test_person_presence_requires_consecutive_hits(self) -> None:
         tracker = PresenceHitTracker(confirmation_hits=2)
         self.assertEqual(tracker.update(1), 0)

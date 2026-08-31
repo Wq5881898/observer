@@ -82,6 +82,14 @@
 .\.venv\Scripts\python.exe -m observer validate-live --profile data/calibration/default.json --role tuning --signals phone_held --scenarios phone_two_hands_low_gaze,phone_non_phone_object --no-error-evidence
 ```
 
+视觉场景通过后运行手机持续事件：
+
+```powershell
+.\.venv\Scripts\python.exe -m observer validate-phone-events --profile data/calibration/default.json --models-dir models --role tuning
+```
+
+完整套件包含正常工作、短暂手机、恢复、持续手机、恢复、非手机物体。若安全反例已通过，只补正例可增加 `--suite positive`。等待页和 3 秒准备页会实时显示 `phone_held`；正例应先调整到 violation 再开始。当前默认手机触发 10 秒、首次扣 5 分、可观测恢复 2 秒、不可观测安全宽限 3 秒。短暂正例要求至少连续 3 秒形成候选且不得报警；持续正例必须至少 80% violation，在 10 秒附近只报警和扣分一次；放下后可以按 2 秒 recovered 或 3 秒 observation_lost 结束。事件批次不保存图像。
+
 窗口显示动作后按空格，先用 3 秒倒计时完成动作，倒计时结束才开始 7 秒记录；记录期间保持动作。每个场景结束后会重新等待空格，不会自动把下一项直接录入。每个批次自动使用独立目录；中途 `Esc` 会取消准备或把正在执行的 trial 标为 invalid 后退出。`--repetitions 1` 只用于熟悉流程，不能作为验收批次。
 
 每个批次包含：
