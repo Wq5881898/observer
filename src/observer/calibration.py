@@ -102,6 +102,30 @@ ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD = 0.14
 ATTENTION_GAZE_DOWN_BOUNDARY = 1.0
 
 
+def attention_down_evidence_matches(
+    *,
+    yaw_delta: float,
+    pitch_delta: float,
+    screen_y: float | None,
+) -> bool:
+    """Classify down evidence only when horizontal head turn is not dominant.
+
+    Iris regression is unreliable on the vertical axis during a large
+    horizontal turn. Horizontal direction therefore has precedence and makes
+    all down evidence ineligible, including the strong-pitch fallback.
+    """
+
+    if abs(yaw_delta) >= ATTENTION_HEAD_YAW_DELTA_THRESHOLD:
+        return False
+    combined_down = (
+        pitch_delta >= ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD
+        and screen_y is not None
+        and screen_y > ATTENTION_GAZE_DOWN_BOUNDARY
+    )
+    strong_down = pitch_delta >= ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD
+    return combined_down or strong_down
+
+
 @dataclass(frozen=True, slots=True)
 class PostureCalibration:
     feature_version: str
@@ -352,20 +376,16 @@ class AttentionCalibration:
         upward_gaze_away = (
             screen_y is not None and screen_y < -self.allowed_margin
         )
-        combined_down_away = (
-            pitch_delta >= ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD
-            and screen_y is not None
-            and screen_y > ATTENTION_GAZE_DOWN_BOUNDARY
-        )
-        strong_down_away = (
-            pitch_delta >= ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD
+        down_away = attention_down_evidence_matches(
+            yaw_delta=yaw_delta,
+            pitch_delta=pitch_delta,
+            screen_y=screen_y,
         )
         head_or_directional_gaze_away = (
             yaw_ratio >= 1.0
             or horizontal_gaze_away
             or upward_gaze_away
-            or combined_down_away
-            or strong_down_away
+            or down_away
         )
         if head_or_directional_gaze_away:
             pitch_ratio = max(

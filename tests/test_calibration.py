@@ -9,6 +9,7 @@ from observer.calibration import (
     AttentionSample,
     EnvironmentFingerprint,
     aggregate_attention_samples,
+    attention_down_evidence_matches,
     create_profile,
     fit_attention_calibration,
     fit_posture_calibration,
@@ -387,6 +388,29 @@ class CalibrationTests(unittest.TestCase):
         self.assertIs(horizontal_turn_false_y.state, SignalState.COMPLIANT)
         self.assertIs(small_chin_drop.state, SignalState.COMPLIANT)
         self.assertIs(real_down.state, SignalState.VIOLATION)
+
+    def test_horizontal_turn_has_precedence_over_all_down_evidence(self) -> None:
+        self.assertFalse(
+            attention_down_evidence_matches(
+                yaw_delta=-0.50,
+                pitch_delta=0.05,
+                screen_y=1.17,
+            )
+        )
+        self.assertFalse(
+            attention_down_evidence_matches(
+                yaw_delta=-0.50,
+                pitch_delta=0.30,
+                screen_y=1.50,
+            )
+        )
+        self.assertTrue(
+            attention_down_evidence_matches(
+                yaw_delta=-0.03,
+                pitch_delta=0.11,
+                screen_y=1.20,
+            )
+        )
 
     def test_profile_roundtrip_and_environment_guard(self) -> None:
         posture = fit_posture_calibration(

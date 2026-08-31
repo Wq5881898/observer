@@ -14,10 +14,8 @@ import numpy as np
 
 from observer.alignment import guide_alignment
 from observer.calibration import (
-    ATTENTION_GAZE_DOWN_BOUNDARY,
-    ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD,
-    ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD,
     ATTENTION_HEAD_YAW_DELTA_THRESHOLD,
+    attention_down_evidence_matches,
     load_profile,
 )
 from observer.calibration_workflow import current_environment
@@ -160,20 +158,15 @@ def attention_direction_matches(scenario: Scenario, signal: SignalValue) -> bool
             and screen_x > 1.0 + ATTENTION_DIRECTION_SCREEN_MARGIN
         )
     if scenario.scenario_id.startswith("attention_desk"):
-        horizontal_is_not_dominant = (
-            yaw is None or abs(yaw) < ATTENTION_HEAD_YAW_DELTA_THRESHOLD
+        return (
+            yaw is not None
+            and pitch is not None
+            and attention_down_evidence_matches(
+                yaw_delta=yaw,
+                pitch_delta=pitch,
+                screen_y=screen_y,
+            )
         )
-        combined_down = (
-            pitch is not None
-            and pitch >= ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD
-            and screen_y is not None
-            and screen_y > ATTENTION_GAZE_DOWN_BOUNDARY
-        )
-        strong_down = (
-            pitch is not None
-            and pitch >= ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD
-        )
-        return horizontal_is_not_dominant and (combined_down or strong_down)
     return signal.state in scenario_accepted_states(scenario)
 
 
