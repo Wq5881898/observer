@@ -382,6 +382,7 @@ def _validate_away_events(
     profile_path: Path,
     dataset_role: str,
     output_root: Path,
+    suite: str,
 ) -> int:
     from observer.live_validation import run_away_event_validation
 
@@ -393,6 +394,7 @@ def _validate_away_events(
         profile_path,
         dataset_role=dataset_role,
         output_root=output_root,
+        suite=suite,
     )
     report_path = batch_directory / "event_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -503,6 +505,12 @@ def build_parser() -> argparse.ArgumentParser:
     event_parser.add_argument("--models-dir", type=Path, default=Path("models"))
     event_parser.add_argument("--role", choices=("tuning", "holdout"), required=True)
     event_parser.add_argument(
+        "--suite",
+        choices=("full", "brief"),
+        default="full",
+        help="full event chain or focused below-threshold brief-away test",
+    )
+    event_parser.add_argument(
         "--output-root", type=Path, default=Path("data/validation")
     )
     purge_parser = subparsers.add_parser(
@@ -559,6 +567,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.profile,
             args.role,
             args.output_root,
+            args.suite,
         )
     if args.command == "evidence-purge":
         return _evidence_purge(args.index, args.apply)

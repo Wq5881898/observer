@@ -84,6 +84,12 @@ AWAY_EVENT_SCENARIOS: tuple[Scenario, ...] = (
     Scenario("event_camera_covered", "away", SignalState.UNKNOWN, "Cover the camera completely", duration_seconds=5.0, repetitions=1),
 )
 
+BRIEF_AWAY_SCENARIOS: tuple[Scenario, ...] = (
+    Scenario("event_normal", "away", SignalState.COMPLIANT, "Sit normally for the baseline", duration_seconds=5.0, repetitions=1),
+    Scenario("event_brief_away", "away", SignalState.VIOLATION, "Leave camera view for 10s; no alert expected", duration_seconds=10.0, repetitions=1),
+    Scenario("event_brief_recovery", "away", SignalState.COMPLIANT, "Return and sit normally", duration_seconds=4.0, repetitions=1),
+)
+
 
 class ValidationCancelled(RuntimeError):
     pass
@@ -218,10 +224,15 @@ def run_away_event_validation(
     *,
     dataset_role: str,
     output_root: str | Path = "data/validation",
+    suite: str = "full",
 ) -> Path:
     """Exercise the configured away rule against one continuous live session."""
 
     import cv2
+
+    if suite not in {"full", "brief"}:
+        raise ValueError("away event suite must be 'full' or 'brief'")
+    scenarios = AWAY_EVENT_SCENARIOS if suite == "full" else BRIEF_AWAY_SCENARIOS
 
     away_configs = tuple(rule for rule in config.rules if rule.rule_id == "away")
     if len(away_configs) != 1 or away_configs[0].signal_name != "away":
@@ -247,7 +258,7 @@ def run_away_event_validation(
         alignment = guide_alignment(camera, probe, profile, window)
 
         batch_id = (
-            f"event-{dataset_role}-"
+            f"event-{suite}-{dataset_role}-"
             f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
             f"{uuid4().hex[:8]}"
         )
@@ -272,7 +283,7 @@ def run_away_event_validation(
         segments: list[dict[str, Any]] = []
         actions: list[dict[str, Any]] = []
         samples_path = batch_directory / "event_samples.jsonl"
-        for scenario in AWAY_EVENT_SCENARIOS:
+        for scenario in scenarios:
             _await_ready(camera, window, scenario, 1, 1)
             segment, segment_actions, derived_records, interrupted = _run_event_segment(
                 camera,
@@ -291,14 +302,22 @@ def run_away_event_validation(
                     f"event validation cancelled during {scenario.scenario_id}"
                 )
 
-        report = evaluate_away_event_report(
-            segments,
-            actions,
-            trigger_after_seconds=away_config.trigger_after_seconds,
-            recovery_after_seconds=away_config.recovery_after_seconds,
-            expected_penalty_points=away_config.initial_penalty_points,
-            final_score=engine.ledger.score,
-        )
+        if suite == "full":
+            report = evaluate_away_event_report(
+                segments,
+                actions,
+                trigger_after_seconds=away_config.trigger_after_seconds,
+                recovery_after_seconds=away_config.recovery_after_seconds,
+                expected_penalty_points=away_config.initial_penalty_points,
+                final_score=engine.ledger.score,
+            )
+        else:
+            report = evaluate_brief_away_report(
+                segments,
+                actions,
+                final_score=engine.ledger.score,
+            )
+        report["suite"] = suite
         (batch_directory / "event_segments.json").write_text(
             json.dumps(segments, indent=2, ensure_ascii=False, sort_keys=True),
             encoding="utf-8",
@@ -553,6 +572,49 @@ def evaluate_away_event_report(
             for scenario_id in by_scenario
         },
         "penalty_points": penalty_points,
+        "final_score": final_score,
+    }
+
+
+def evaluate_brief_away_report(
+    segments: Sequence[dict[str, Any]],
+    actions: Sequence[dict[str, Any]],
+    *,
+    final_score: float,
+) -> dict[str, Any]:
+    """Evaluate the focused below-threshold away and reset sequence."""
+
+    by_scenario = {segment["scenario_id"]: segment for segment in segments}
+
+    def state_ratio(scenario_id: str, state: str) -> float:
+        counts = by_scenario[scenario_id]["state_counts"]
+        total = sum(counts.values())
+        return counts.get(state, 0) / total if total else 0.0
+
+    forbidden_actions = [
+        action
+        for action in actions
+        if action["kind"] in {"activated", "alert", "penalty"}
+    ]
+    ratios = {
+        scenario_id: {
+            state: state_ratio(scenario_id, state)
+            for state in ("compliant", "violation", "unknown", "exempt")
+        }
+        for scenario_id in by_scenario
+    }
+    checks = {
+        "normal_input_valid": ratios["event_normal"]["compliant"] >= 0.8,
+        "brief_away_input_valid": ratios["event_brief_away"]["violation"] >= 0.8,
+        "recovery_input_valid": ratios["event_brief_recovery"]["compliant"] >= 0.8,
+        "no_activation_alert_or_penalty": not forbidden_actions,
+        "final_score_unchanged": abs(final_score - 100.0) < 1e-6,
+    }
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "state_ratios": ratios,
+        "forbidden_actions": forbidden_actions,
         "final_score": final_score,
     }
 

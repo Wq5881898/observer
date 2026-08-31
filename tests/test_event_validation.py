@@ -1,6 +1,6 @@
 import unittest
 
-from observer.live_validation import evaluate_away_event_report
+from observer.live_validation import evaluate_away_event_report, evaluate_brief_away_report
 
 
 def segment(scenario_id: str, *, started: float, compliant=0, violation=0, unknown=0):
@@ -112,6 +112,18 @@ class AwayEventReportTests(unittest.TestCase):
             report["state_ratios"]["event_brief_away"]["violation"],
             51 / 129,
         )
+
+    def test_focused_brief_away_report_requires_real_input_and_no_penalty(self) -> None:
+        segments = self.segments[:3]
+        report = evaluate_brief_away_report(segments, [], final_score=100.0)
+        self.assertTrue(report["passed"])
+
+        segments[1] = segment(
+            "event_brief_away", started=10.0, compliant=30, violation=70
+        )
+        report = evaluate_brief_away_report(segments, [], final_score=100.0)
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["brief_away_input_valid"])
 
 
 if __name__ == "__main__":

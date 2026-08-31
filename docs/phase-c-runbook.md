@@ -103,6 +103,14 @@ trial 分类通过后，必须让同一个规则引擎跨场景连续运行，�
 
 2026-08-31 tuning 批次 `event-tuning-20260831T052607Z-429bb6a0` 的 20 秒触发、3 分扣分、约 1.97 秒恢复、遮脸在场和遮镜头 unknown 均通过；短暂离席段只形成约 4 秒可识别离席，因此只作为短时计时取消证据，不作为完整连续 10 秒证据。实际声音与 Windows 系统通知尚未接入，本命令验证的是报警动作事件。
 
+只补测短暂离席时使用专项套件，不重复完整七段：
+
+```powershell
+.\.venv\Scripts\python.exe -m observer validate-away-events --profile data/calibration/default.json --models-dir models --role tuning --suite brief
+```
+
+专项依次记录正常基线 5 秒、短暂离席 10 秒和返回 4 秒；三段目标状态占比都必须至少 80%，不得产生激活、报警或扣分，最终分数必须为 100。批次 `event-brief-tuning-20260831T054804Z-769e90af` 实测三段目标状态均为 100%，专项通过。
+
 ## 5. 冻结并跑全新 holdout
 
 修复 tuning 问题后重新运行自动化测试，提交代码和配置。确认将要用于 holdout 的 Git SHA、模型清单和校准档案不再变化，然后用全新动作运行：
