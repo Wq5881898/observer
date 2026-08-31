@@ -53,12 +53,9 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("phone_one_hand", "phone_held", SignalState.VIOLATION, "Use your phone naturally with one hand", duration_seconds=6.0, repetitions=1),
     Scenario("phone_two_hands_low_gaze", "phone_held", SignalState.VIOLATION, "Use your phone with both hands and look down naturally", duration_seconds=6.0, repetitions=1),
     Scenario("phone_non_phone_object", "phone_held", SignalState.COMPLIANT, "Hold one non-phone object: remote, calculator, or dark notebook", duration_seconds=6.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
-    Scenario("posture_neutral", "posture_deviation", SignalState.COMPLIANT, "Use normal neutral posture"),
-    Scenario("posture_forward", "posture_deviation", SignalState.VIOLATION, "Lean forward and stay there"),
-    Scenario("posture_left", "posture_deviation", SignalState.VIOLATION, "Lean left and stay there"),
-    Scenario("posture_right", "posture_deviation", SignalState.VIOLATION, "Lean right and stay there"),
-    Scenario("posture_head_forward", "posture_deviation", SignalState.VIOLATION, "Move head/shoulders forward"),
-    Scenario("posture_shoulders_hidden", "posture_deviation", SignalState.UNKNOWN, "Hide both shoulders", repetitions=3),
+    Scenario("posture_neutral", "posture_deviation", SignalState.COMPLIANT, "Sit in your normal comfortable upright posture", duration_seconds=6.0, repetitions=1),
+    Scenario("posture_forward_slouch", "posture_deviation", SignalState.VIOLATION, "Lean or slouch clearly forward and hold", duration_seconds=6.0, repetitions=1),
+    Scenario("posture_side_lean", "posture_deviation", SignalState.VIOLATION, "Lean clearly to either side and hold", duration_seconds=6.0, repetitions=1),
     Scenario("attention_center", "attention_away", SignalState.COMPLIANT, "Look at the dot", target=(0.50, 0.50)),
     Scenario("attention_top_left", "attention_away", SignalState.COMPLIANT, "Look at the dot", target=(0.08, 0.08), repetitions=3),
     Scenario("attention_top_right", "attention_away", SignalState.COMPLIANT, "Look at the dot", target=(0.92, 0.08), repetitions=3),
@@ -107,7 +104,8 @@ class ValidationCancelled(RuntimeError):
     pass
 
 
-TRIAL_PREPARE_SECONDS = 3.0
+TRIAL_PREPARE_SECONDS = 1.0
+TARGET_READY_SECONDS = 0.6
 
 
 def scenario_catalog() -> list[dict[str, Any]]:
@@ -959,6 +957,7 @@ def _await_ready(
     import cv2
 
     last_sequence = 0
+    target_since: float | None = None
     while True:
         snapshot = camera.buffer.latest(after_sequence=last_sequence)
         if snapshot is None:
@@ -966,19 +965,41 @@ def _await_ready(
         else:
             last_sequence = snapshot.sequence
             probe.process_due(snapshot.frame, snapshot.captured_monotonic)
-            current_state = probe.observation(snapshot.captured_monotonic).signal(
+            signal = probe.observation(snapshot.captured_monotonic).signal(
                 scenario.signal_name
-            ).state.value
+            )
+            current_state = signal.state
+            target_matches = current_state in scenario_accepted_states(scenario)
+            if target_matches:
+                if target_since is None:
+                    target_since = snapshot.captured_monotonic
+            else:
+                target_since = None
+            ready_seconds = (
+                max(0.0, snapshot.captured_monotonic - target_since)
+                if target_since is not None
+                else 0.0
+            )
+            target_ready = target_matches and ready_seconds >= TARGET_READY_SECONDS
+            accepted = "/".join(
+                state.value for state in scenario_accepted_states(scenario)
+            )
             canvas = _scenario_canvas(snapshot.frame, scenario)
             _put_lines(
                 canvas,
                 (
                     f"{scenario.scenario_id} ({repetition}/{repetitions})",
                     scenario.instruction,
-                    f"Live check: {scenario.signal_name}={current_state}",
-                    "SPACE=begin 3s preparation   ESC=cancel batch",
+                    f"TARGET: {accepted}   CURRENT: {current_state.value}",
+                    (
+                        "TARGET READY - press SPACE to sample"
+                        if target_ready
+                        else "NOT READY - adjust/hold; SPACE still records this attempt"
+                    ),
+                    "SPACE=begin 1s preparation   ESC=cancel batch",
                 ),
             )
+            _draw_target_badge(canvas, target_ready)
             cv2.imshow(window, canvas)
             key = cv2.waitKey(1)
         if key & 0xFF == 27:
@@ -1010,7 +1031,8 @@ def _run_prepare_countdown(
             probe.process_due(snapshot.frame, snapshot.captured_monotonic)
             current_state = probe.observation(snapshot.captured_monotonic).signal(
                 scenario.signal_name
-            ).state.value
+            ).state
+            target_matches = current_state in scenario_accepted_states(scenario)
             canvas = _scenario_canvas(snapshot.frame, scenario)
             remaining = max(0.0, duration_seconds - (time.monotonic() - started))
             _put_lines(
@@ -1018,7 +1040,8 @@ def _run_prepare_countdown(
                 (
                     scenario.instruction,
                     f"PREPARE NOW - recording starts in {remaining:0.1f}s",
-                    f"Live check: {scenario.signal_name}={current_state}",
+                    f"CURRENT: {current_state.value}   "
+                    f"TARGET: {'MATCHED' if target_matches else 'NOT MATCHED'}",
                     f"Complete the action, then hold it for {scenario.duration_seconds:g}s   ESC=cancel",
                 ),
             )
@@ -1082,7 +1105,16 @@ def _run_trial(
         error_frame = snapshot.frame.copy()
         canvas = _scenario_canvas(snapshot.frame, scenario)
         remaining = max(0.0, scenario.duration_seconds - (time.monotonic() - started))
-        _put_lines(canvas, (scenario.instruction, f"Recording {remaining:0.1f}s"))
+        target_matches = signal.state in scenario_accepted_states(scenario)
+        _put_lines(
+            canvas,
+            (
+                scenario.instruction,
+                f"Sampling {remaining:0.1f}s - no video saved",
+                f"CURRENT: {signal.state.value}   "
+                f"TARGET: {'MAINTAINED' if target_matches else 'LOST - still recorded'}",
+            ),
+        )
         cv2.imshow(window, canvas)
         if cv2.waitKey(1) & 0xFF == 27:
             interrupted = True
@@ -1183,6 +1215,36 @@ def _put_lines(frame: Any, lines: Sequence[str]) -> None:
             1,
             cv2.LINE_AA,
         )
+
+
+def _draw_target_badge(frame: Any, ready: bool) -> None:
+    """Draw an obvious readiness mark without depending on font glyph support."""
+
+    import cv2
+
+    height, width = frame.shape[:2]
+    color = (55, 200, 55) if ready else (60, 170, 230)
+    label = "TARGET READY" if ready else "TARGET NOT READY"
+    left = max(12, width - 250)
+    top = max(12, height - 76)
+    cv2.rectangle(frame, (left, top), (width - 12, height - 12), (20, 20, 20), -1)
+    cv2.rectangle(frame, (left, top), (width - 12, height - 12), color, 2)
+    if ready:
+        cv2.line(frame, (left + 14, top + 34), (left + 27, top + 48), color, 5)
+        cv2.line(frame, (left + 27, top + 48), (left + 50, top + 18), color, 5)
+    else:
+        cv2.line(frame, (left + 17, top + 20), (left + 46, top + 49), color, 4)
+        cv2.line(frame, (left + 46, top + 20), (left + 17, top + 49), color, 4)
+    cv2.putText(
+        frame,
+        label,
+        (left + 60, top + 41),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.54,
+        color,
+        2,
+        cv2.LINE_AA,
+    )
 
 
 def _wait_for_frame(camera: CameraWorker):

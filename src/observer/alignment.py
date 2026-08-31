@@ -60,29 +60,42 @@ class AlignmentAssessment:
 class AlignmentStability:
     required_seconds: float = 3.0
     dropout_grace_seconds: float = 0.5
+    misalignment_grace_seconds: float = 0.5
     aligned_since: float | None = None
-    indeterminate_since: float | None = None
+    interruption_since: float | None = None
+    interruption_indeterminate: bool = False
 
     def __post_init__(self) -> None:
-        if self.required_seconds <= 0 or self.dropout_grace_seconds < 0:
+        if (
+            self.required_seconds <= 0
+            or self.dropout_grace_seconds < 0
+            or self.misalignment_grace_seconds < 0
+        ):
             raise ValueError("required alignment duration must be positive")
 
     def update(self, now_monotonic: float, aligned: bool | None) -> tuple[float, bool]:
-        if aligned is False:
-            self.aligned_since = None
-            self.indeterminate_since = None
-            return 0.0, False
-        if aligned is None:
+        if aligned is not True:
             if self.aligned_since is None:
                 return 0.0, False
-            if self.indeterminate_since is None:
-                self.indeterminate_since = now_monotonic
-            if now_monotonic - self.indeterminate_since > self.dropout_grace_seconds:
+            if self.interruption_since is None:
+                self.interruption_since = now_monotonic
+                self.interruption_indeterminate = aligned is None
+            grace = (
+                self.dropout_grace_seconds
+                if self.interruption_indeterminate
+                else self.misalignment_grace_seconds
+            )
+            held = max(0.0, self.interruption_since - self.aligned_since)
+            if now_monotonic - self.interruption_since > grace:
                 self.aligned_since = None
-                self.indeterminate_since = None
+                self.interruption_since = None
                 return 0.0, False
-            return max(0.0, now_monotonic - self.aligned_since), False
-        self.indeterminate_since = None
+            # Brief landmark jitter pauses progress instead of advancing or
+            # immediately erasing an otherwise stable alignment.
+            return held, False
+        if self.interruption_since is not None and self.aligned_since is not None:
+            self.aligned_since += now_monotonic - self.interruption_since
+        self.interruption_since = None
         if self.aligned_since is None:
             self.aligned_since = now_monotonic
         elapsed = max(0.0, now_monotonic - self.aligned_since)
@@ -285,6 +298,9 @@ def guide_alignment(
     attention_feature_counts: dict[str, int] = {}
     posture_feature_counts: dict[str, int] = {}
     quality_counts: dict[str, int] = {}
+    alignment_reason_counts: dict[str, int] = {}
+    posture_state_counts: dict[str, int] = {}
+    posture_metric_values: dict[str, list[float]] = {}
     while True:
         now = time.monotonic()
         if now - started >= timeout_seconds:
@@ -300,6 +316,17 @@ def guide_alignment(
                     "quality_observations": quality_counts,
                     "attention_feature_observations": attention_feature_counts,
                     "posture_feature_observations": posture_feature_counts,
+                    "alignment_reasons": alignment_reason_counts,
+                    "posture_states": posture_state_counts,
+                    "posture_metrics": {
+                        name: {
+                            "minimum": min(values),
+                            "median": median(values),
+                            "maximum": max(values),
+                        }
+                        for name, values in posture_metric_values.items()
+                        if values
+                    },
                     "frames_saved": 0,
                 },
             )
@@ -338,6 +365,15 @@ def guide_alignment(
             probe.latest_posture_features,
             require_posture=require_posture,
         )
+        alignment_reason_counts[final_assessment.reason] = (
+            alignment_reason_counts.get(final_assessment.reason, 0) + 1
+        )
+        posture_key = final_assessment.posture_state.value
+        posture_state_counts[posture_key] = posture_state_counts.get(posture_key, 0) + 1
+        if probe.latest_posture_features is not None:
+            posture_signal = profile.posture.evaluate(probe.latest_posture_features)
+            for name, value in posture_signal.metrics.items():
+                posture_metric_values.setdefault(name, []).append(float(value))
         indeterminate = (
             final_assessment.context_z is None
             or (
@@ -553,16 +589,8 @@ def _draw_alignment_overlay(
     cv2.circle(frame, (width // 2, height // 2), 11, (0, 215, 255), -1)
     cv2.circle(frame, (width // 2, height // 2), 3, (255, 255, 255), -1)
     cv2.rectangle(frame, (0, 0), (width, 142), (20, 20, 20), -1)
-    lines = [
-        "Look at the yellow center dot; move the face cross into the green box",
-        assessment.reason,
-    ]
+    lines = ["Align face with the box and look at the yellow dot"]
     if assessment.context_z is not None:
-        lines.append(
-            f"face context z={assessment.context_z:.1f} "
-            f"(need <= 5.0)  face size={assessment.current_scale:.3f}/"
-            f"{assessment.target_scale:.3f}  posture={assessment.posture_state.value}"
-        )
         size_delta = assessment.current_scale - assessment.target_scale
         if abs(size_delta) <= (assessment.tolerance_scale or 0.0):
             size_status = "SIZE OK"
@@ -570,11 +598,28 @@ def _draw_alignment_overlay(
             size_status = "TOO CLOSE - MOVE FARTHER"
         else:
             size_status = "TOO FAR - MOVE CLOSER"
-        lines.append(
-            f"POSITION={'OK' if position_aligned else 'ADJUST'}   {size_status}"
+        lines.extend(
+            (
+                f"FACE POSITION: {'PASS' if position_aligned else 'ADJUST'}   "
+                f"FACE SIZE: {size_status}",
+                f"FACE CONTEXT: {'PASS' if assessment.context_z <= 5.0 else 'ADJUST'} "
+                f"(z={assessment.context_z:.1f}, need <=5.0)   "
+                f"POSTURE: {assessment.posture_state.value}",
+                (
+                    "OVERALL: READY - hold steady"
+                    if assessment.aligned
+                    else f"OVERALL: BLOCKED - {assessment.reason}"
+                ),
+            )
         )
     else:
-        lines.append(f"warming up face smoothing  posture={assessment.posture_state.value}")
+        lines.extend(
+            (
+                "FACE POSITION/SIZE: waiting for stable landmarks",
+                f"POSTURE: {assessment.posture_state.value}",
+                f"OVERALL: BLOCKED - {assessment.reason}",
+            )
+        )
     for index, line in enumerate(lines):
         cv2.putText(
             frame,

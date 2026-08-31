@@ -150,16 +150,28 @@ class AlignmentTests(unittest.TestCase):
         self.assertIs(result.posture_state, SignalState.UNKNOWN)
         self.assertIn("not gating", result.reason)
 
-    def test_stability_timer_resets_after_any_misalignment(self) -> None:
+    def test_stability_timer_pauses_for_brief_misalignment(self) -> None:
         stability = AlignmentStability(required_seconds=3.0)
 
         self.assertEqual(stability.update(10.0, True), (0.0, False))
         self.assertEqual(stability.update(12.0, True), (2.0, False))
-        self.assertEqual(stability.update(12.1, False), (0.0, False))
-        self.assertEqual(stability.update(15.0, True), (0.0, False))
-        elapsed, complete = stability.update(18.1, True)
+        elapsed, complete = stability.update(12.1, False)
+        self.assertAlmostEqual(elapsed, 2.1)
+        self.assertFalse(complete)
+        elapsed, complete = stability.update(12.4, True)
+        self.assertAlmostEqual(elapsed, 2.1)
+        self.assertFalse(complete)
+        elapsed, complete = stability.update(13.4, True)
         self.assertAlmostEqual(elapsed, 3.1)
         self.assertTrue(complete)
+
+    def test_stability_timer_resets_after_sustained_misalignment(self) -> None:
+        stability = AlignmentStability(required_seconds=3.0)
+
+        stability.update(10.0, True)
+        stability.update(12.0, False)
+        self.assertEqual(stability.update(12.6, False), (0.0, False))
+        self.assertEqual(stability.update(13.0, True), (0.0, False))
 
     def test_stability_timer_tolerates_short_indeterminate_dropout(self) -> None:
         stability = AlignmentStability(
@@ -169,9 +181,12 @@ class AlignmentTests(unittest.TestCase):
         stability.update(10.0, True)
         self.assertEqual(stability.update(11.0, None), (1.0, False))
         elapsed, complete = stability.update(11.3, True)
-        self.assertAlmostEqual(elapsed, 1.3)
+        self.assertAlmostEqual(elapsed, 1.0)
         self.assertFalse(complete)
         elapsed, complete = stability.update(13.1, True)
+        self.assertAlmostEqual(elapsed, 2.8)
+        self.assertFalse(complete)
+        elapsed, complete = stability.update(13.4, True)
         self.assertAlmostEqual(elapsed, 3.1)
         self.assertTrue(complete)
 

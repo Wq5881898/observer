@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from observer.live_validation import Scenario, scenario_accepted_states
+from observer.live_validation import SCENARIOS, Scenario, scenario_accepted_states
 from observer.observations import SignalState
 from observer.validation import (
     ErrorEvidenceStore,
@@ -33,6 +33,18 @@ def trial(trial_id: str, truth: str, prediction: str) -> TrialRecord:
 
 
 class ValidationTests(unittest.TestCase):
+    def test_posture_validation_uses_three_simple_realistic_scenarios(self) -> None:
+        posture_scenarios = [
+            scenario for scenario in SCENARIOS if scenario.signal_name == "posture_deviation"
+        ]
+
+        self.assertEqual(
+            [scenario.scenario_id for scenario in posture_scenarios],
+            ["posture_neutral", "posture_forward_slouch", "posture_side_lean"],
+        )
+        self.assertTrue(all(scenario.duration_seconds == 6.0 for scenario in posture_scenarios))
+        self.assertTrue(all(scenario.repetitions == 1 for scenario in posture_scenarios))
+
     def test_scenario_can_accept_safe_unknown_without_accepting_violation(self) -> None:
         scenario = Scenario(
             "natural",

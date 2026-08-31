@@ -136,6 +136,10 @@ class MediapipeVisionProbe:
         self._last_smoothed_attention_features: FeatureVector | None = None
         self._attention_smoother = FeatureMedianSmoother("attention")
         self._last_posture_features: FeatureVector | None = None
+        self._last_smoothed_posture_features: FeatureVector | None = None
+        self._posture_smoother = FeatureMedianSmoother(
+            "posture", window_size=7, minimum_samples=5
+        )
         self._latest_face_landmarks: Any = None
         self._latest_face_at: float | None = None
         self._latest_pose_at: float | None = None
@@ -257,12 +261,23 @@ class MediapipeVisionProbe:
                 presence_credible=self._last_pose_presence_credible,
             )
             self._latest_pose_at = now_monotonic
+            if quality.observable:
+                self._last_smoothed_posture_features = self._posture_smoother.update(
+                    self._last_posture_features
+                )
+            else:
+                self._posture_smoother.reset()
+                self._last_smoothed_posture_features = FeatureVector(
+                    "posture", {}, reasons=quality.reasons
+                )
             if not quality.observable:
                 posture_signal = self._unknown_quality_signal(quality)
             elif self._calibration is None:
                 posture_signal = self._unknown_signal("posture calibration not available")
             else:
-                posture_signal = self._calibration.posture.evaluate(self._last_posture_features)
+                posture_signal = self._calibration.posture.evaluate(
+                    self._last_smoothed_posture_features
+                )
             self._fusion.update_posture(now_monotonic, posture_signal)
             self._next_due["pose"] = now_monotonic + 1.0 / self._rates.pose_fps
 
@@ -340,7 +355,7 @@ class MediapipeVisionProbe:
 
     @property
     def latest_posture_features(self) -> FeatureVector | None:
-        return self._last_posture_features
+        return self._last_smoothed_posture_features
 
     def derived_snapshot(self) -> dict[str, Any]:
         """Return numeric, non-image data needed for validation and offline ablations."""
@@ -401,6 +416,16 @@ class MediapipeVisionProbe:
             "posture_reasons": (
                 self._last_posture_features.reasons
                 if self._last_posture_features is not None
+                else ()
+            ),
+            "posture_smoothed": (
+                dict(self._last_smoothed_posture_features.values)
+                if self._last_smoothed_posture_features is not None
+                else None
+            ),
+            "posture_smoothed_reasons": (
+                self._last_smoothed_posture_features.reasons
+                if self._last_smoothed_posture_features is not None
                 else ()
             ),
             "pose_presence_credible": self._last_pose_presence_credible,

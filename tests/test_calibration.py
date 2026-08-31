@@ -52,12 +52,21 @@ class CalibrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.environment = EnvironmentFingerprint(0, 640, 480, True, 1920, 1080, 100)
 
-    def test_posture_uses_two_group_vote(self) -> None:
+    def test_posture_uses_two_group_vote_or_corroborated_lateral_lean(self) -> None:
         calibration = fit_posture_calibration(
             [posture_sample(index) for index in range(40)], planned_sample_count=40
         )
         compliant = calibration.evaluate(posture_sample())
-        one_group = calibration.evaluate(
+        one_feature = calibration.evaluate(
+            FeatureVector(
+                "posture",
+                {
+                    **posture_sample().values,
+                    "shoulder_slope": 1.0,
+                },
+            )
+        )
+        corroborated_alignment = calibration.evaluate(
             FeatureVector(
                 "posture",
                 {
@@ -78,7 +87,8 @@ class CalibrationTests(unittest.TestCase):
             )
         )
         self.assertIs(compliant.state, SignalState.COMPLIANT)
-        self.assertIs(one_group.state, SignalState.COMPLIANT)
+        self.assertIs(one_feature.state, SignalState.COMPLIANT)
+        self.assertIs(corroborated_alignment.state, SignalState.VIOLATION)
         self.assertIs(two_groups.state, SignalState.VIOLATION)
 
     def test_attention_ridge_model_classifies_inside_and_outside(self) -> None:
@@ -221,6 +231,23 @@ class CalibrationTests(unittest.TestCase):
 
         self.assertIs(signal.state, SignalState.COMPLIANT)
         self.assertLessEqual(signal.metrics.get("attention_context_z", 0.0), 5.0)
+
+        practical_scale_shift = calibration.evaluate(
+            FeatureVector(
+                "attention",
+                {
+                    "gaze_x": 0.5,
+                    "gaze_y": 0.5,
+                    "face_center_x": 0.52,
+                    "face_center_y": 0.66,
+                    "face_scale": 0.317,
+                },
+            )
+        )
+        self.assertIs(practical_scale_shift.state, SignalState.COMPLIANT)
+        self.assertLessEqual(
+            practical_scale_shift.metrics.get("attention_context_z", 0.0), 5.0
+        )
 
     def test_profile_roundtrip_and_environment_guard(self) -> None:
         posture = fit_posture_calibration(

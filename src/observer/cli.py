@@ -348,7 +348,15 @@ def _validate_live(
     repetitions: int | None,
     save_error_evidence: bool,
 ) -> int:
+    from observer.alignment import AlignmentCancelled, AlignmentTimeout
     from observer.live_validation import run_live_validation
+
+    def assessment_payload(value):
+        if value is None:
+            return None
+        payload = asdict(value)
+        payload["posture_state"] = value.posture_state.value
+        return payload
 
     config = load_config(config_path)
     models = verify_model_directory(models_dir)
@@ -356,17 +364,40 @@ def _validate_live(
     scenario_ids = tuple(
         name.strip() for name in (scenarios or "").split(",") if name.strip()
     )
-    batch_directory = run_live_validation(
-        config,
-        models,
-        profile_path,
-        dataset_role=dataset_role,
-        signal_names=signal_names,
-        scenario_ids=scenario_ids,
-        output_root=output_root,
-        repetitions_override=repetitions,
-        save_error_evidence=save_error_evidence,
-    )
+    try:
+        batch_directory = run_live_validation(
+            config,
+            models,
+            profile_path,
+            dataset_role=dataset_role,
+            signal_names=signal_names,
+            scenario_ids=scenario_ids,
+            output_root=output_root,
+            repetitions_override=repetitions,
+            save_error_evidence=save_error_evidence,
+        )
+    except AlignmentCancelled as exc:
+        print(json.dumps({"aligned": False, "reason": str(exc)}, indent=2))
+        return 2
+    except AlignmentTimeout as exc:
+        print(
+            json.dumps(
+                {
+                    "aligned": False,
+                    "reason": str(exc),
+                    "longest_stable_seconds": round(
+                        exc.longest_stable_seconds, 3
+                    ),
+                    "best_assessment": assessment_payload(exc.best_assessment),
+                    "last_assessment": assessment_payload(exc.last_assessment),
+                    "diagnostics": exc.diagnostics,
+                    "frames_saved": 0,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 3
     print(
         json.dumps(
             {

@@ -88,7 +88,10 @@ ATTENTION_NON_POSITIONAL_FEATURES = frozenset({"eye_a_open", "eye_b_open"})
 ATTENTION_CONTEXT_SCALE_FLOORS: Mapping[str, float] = {
     "face_center_x": 0.004,
     "face_center_y": 0.006,
-    "face_scale": 0.002,
+    # A person cannot reliably reproduce the sub-percent scale variation seen
+    # within one calibration capture. At the default 5 z guard this permits
+    # about +/-0.0175 normalized scale (roughly +/-5.8% around a 0.30 face).
+    "face_scale": 0.0035,
 }
 
 
@@ -116,6 +119,7 @@ class PostureCalibration:
             return SignalValue.unknown("; ".join(features.reasons))
 
         group_scores: dict[str, float] = {}
+        group_feature_scores: dict[str, list[float]] = {}
         metrics: dict[str, float] = {}
         for group, names in POSTURE_GROUPS.items():
             scores: list[float] = []
@@ -129,14 +133,26 @@ class PostureCalibration:
                 metrics[f"posture_z_{name}"] = score
             if scores:
                 group_scores[group] = max(scores)
+                group_feature_scores[group] = scores
 
         if len(group_scores) < self.minimum_groups_outside:
             return SignalValue.unknown("insufficient observable posture feature groups")
         outside = sum(score >= self.z_threshold for score in group_scores.values())
+        alignment_features_outside = sum(
+            score >= self.z_threshold
+            for score in group_feature_scores.get("alignment", ())
+        )
         metrics["posture_groups_observable"] = float(len(group_scores))
         metrics["posture_groups_outside"] = float(outside)
+        metrics["posture_alignment_features_outside"] = float(
+            alignment_features_outside
+        )
         confidence = min(1.0, max(group_scores.values()) / (self.z_threshold * 1.5))
-        if outside >= self.minimum_groups_outside:
+        # A lateral lean primarily changes one feature group. Require both head
+        # offset and shoulder slope to agree so ordinary one-feature jitter does
+        # not weaken the normal two-group false-positive guard.
+        corroborated_lateral_lean = alignment_features_outside >= 2
+        if outside >= self.minimum_groups_outside or corroborated_lateral_lean:
             return SignalValue.violation(confidence=confidence, **metrics)
         return SignalValue.compliant(confidence=1.0 - min(confidence, 0.49), **metrics)
 
