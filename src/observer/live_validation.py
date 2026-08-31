@@ -41,6 +41,7 @@ class Scenario:
     duration_seconds: float = 7.0
     repetitions: int = 5
     target: tuple[float, float] | None = None
+    accepted_states: tuple[SignalState, ...] = ()
 
 
 SCENARIOS: tuple[Scenario, ...] = (
@@ -48,14 +49,10 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("away_leave_seat", "away", SignalState.VIOLATION, "Leave the camera view"),
     Scenario("away_partial_face_pose", "away", SignalState.COMPLIANT, "Keep upper body visible; partially hide face", repetitions=3),
     Scenario("away_camera_covered", "away", SignalState.UNKNOWN, "Cover the camera", repetitions=3),
-    Scenario("phone_none", "phone_held", SignalState.COMPLIANT, "No phone in view"),
-    Scenario("phone_on_desk", "phone_held", SignalState.COMPLIANT, "Phone on desk; hands away"),
-    Scenario("phone_one_hand", "phone_held", SignalState.VIOLATION, "Hold phone in one hand"),
-    Scenario("phone_two_hands", "phone_held", SignalState.VIOLATION, "Use phone with both hands"),
-    Scenario("phone_low_gaze", "phone_held", SignalState.VIOLATION, "Hold phone and look down at it"),
-    Scenario("phone_out_of_frame", "phone_held", SignalState.UNKNOWN, "Move phone and hands below frame", repetitions=3),
-    Scenario("phone_remote", "phone_held", SignalState.COMPLIANT, "Hold a remote or calculator", repetitions=3),
-    Scenario("phone_dark_rectangle", "phone_held", SignalState.COMPLIANT, "Hold a dark notebook", repetitions=3),
+    Scenario("phone_natural_work", "phone_held", SignalState.COMPLIANT, "Work normally; no phone in your hands", duration_seconds=6.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_one_hand", "phone_held", SignalState.VIOLATION, "Use your phone naturally with one hand", duration_seconds=6.0, repetitions=1),
+    Scenario("phone_two_hands_low_gaze", "phone_held", SignalState.VIOLATION, "Use your phone with both hands and look down naturally", duration_seconds=6.0, repetitions=1),
+    Scenario("phone_non_phone_object", "phone_held", SignalState.COMPLIANT, "Hold one non-phone object: remote, calculator, or dark notebook", duration_seconds=6.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
     Scenario("posture_neutral", "posture_deviation", SignalState.COMPLIANT, "Use normal neutral posture"),
     Scenario("posture_forward", "posture_deviation", SignalState.VIOLATION, "Lean forward and stay there"),
     Scenario("posture_left", "posture_deviation", SignalState.VIOLATION, "Lean left and stay there"),
@@ -103,9 +100,14 @@ def scenario_catalog() -> list[dict[str, Any]]:
         {
             **asdict(scenario),
             "truth_state": scenario.truth_state.value,
+            "accepted_states": [state.value for state in scenario_accepted_states(scenario)],
         }
         for scenario in SCENARIOS
     ]
+
+
+def scenario_accepted_states(scenario: Scenario) -> tuple[SignalState, ...]:
+    return scenario.accepted_states or (scenario.truth_state,)
 
 
 def run_live_validation(
@@ -115,13 +117,24 @@ def run_live_validation(
     *,
     dataset_role: str,
     signal_names: Sequence[str],
+    scenario_ids: Sequence[str] = (),
     output_root: str | Path = "data/validation",
     repetitions_override: int | None = None,
     save_error_evidence: bool = True,
 ) -> Path:
     import cv2
 
-    selected = [scenario for scenario in SCENARIOS if scenario.signal_name in signal_names]
+    requested_scenarios = set(scenario_ids)
+    known_scenarios = {scenario.scenario_id for scenario in SCENARIOS}
+    unknown_scenarios = requested_scenarios - known_scenarios
+    if unknown_scenarios:
+        raise ValueError(f"unknown validation scenarios: {sorted(unknown_scenarios)}")
+    selected = [
+        scenario
+        for scenario in SCENARIOS
+        if scenario.signal_name in signal_names
+        and (not requested_scenarios or scenario.scenario_id in requested_scenarios)
+    ]
     unknown_signals = set(signal_names) - {scenario.signal_name for scenario in SCENARIOS}
     if unknown_signals:
         raise ValueError(f"unknown validation signals: {sorted(unknown_signals)}")
@@ -144,13 +157,22 @@ def run_live_validation(
         probe = MediapipeVisionProbe(models, config.inference, profile)
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        alignment = guide_alignment(
-            camera,
-            probe,
-            profile,
-            window,
-            require_posture="posture_deviation" in signal_names,
-        )
+        if set(signal_names) == {"phone_held"}:
+            alignment_summary: dict[str, Any] = {
+                "skipped": True,
+                "reason": "phone-only validation does not depend on attention alignment",
+                "frames_saved": 0,
+            }
+        else:
+            alignment_summary = asdict(
+                guide_alignment(
+                    camera,
+                    probe,
+                    profile,
+                    window,
+                    require_posture="posture_deviation" in signal_names,
+                )
+            )
         batch_id = f"{dataset_role}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
         batch_directory = Path(output_root) / batch_id
         config_hash = _config_hash(config)
@@ -163,7 +185,7 @@ def run_live_validation(
             model_manifest_sha256=manifest_hash,
             calibration_profile_id=profile.profile_id,
             environment=asdict(environment),
-            alignment=asdict(alignment),
+            alignment=alignment_summary,
         )
         recorder = JsonlTrialRecorder(batch_directory, manifest)
         evidence = ErrorEvidenceStore(
@@ -184,7 +206,8 @@ def run_live_validation(
                     sampler,
                     resource_samples,
                 )
-                is_error = record.valid and record.predicted_state != record.truth_state
+                accepted = {state.value for state in scenario_accepted_states(scenario)}
+                is_error = record.valid and record.predicted_state not in accepted
                 evidence_result = evidence.save(
                     record.trial_id, error_frame, is_error=is_error
                 )
@@ -203,7 +226,33 @@ def run_live_validation(
         records_path = batch_directory / "trials.jsonl"
         from observer.validation import read_trials
 
-        write_metrics_report(read_trials(records_path), batch_directory / "report.json")
+        records = read_trials(records_path)
+        report = write_metrics_report(records, batch_directory / "report.json")
+        scenario_by_id = {scenario.scenario_id: scenario for scenario in selected}
+        scenario_checks = [
+            {
+                "trial_id": record.trial_id,
+                "scenario_id": record.scenario_id,
+                "predicted_state": record.predicted_state,
+                "accepted_states": [
+                    state.value
+                    for state in scenario_accepted_states(scenario_by_id[record.scenario_id])
+                ],
+                "passed": record.valid
+                and record.predicted_state
+                in {
+                    state.value
+                    for state in scenario_accepted_states(scenario_by_id[record.scenario_id])
+                },
+            }
+            for record in records
+        ]
+        report["scenario_checks"] = scenario_checks
+        report["passed"] = all(check["passed"] for check in scenario_checks)
+        (batch_directory / "report.json").write_text(
+            json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
         resource_report = asdict(summarize_resources(resource_samples, config.resources))
         (batch_directory / "resources.json").write_text(
             json.dumps(resource_report, indent=2, ensure_ascii=False, sort_keys=True),

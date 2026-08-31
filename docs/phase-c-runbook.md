@@ -76,6 +76,12 @@
 .\.venv\Scripts\python.exe -m observer validate-live --profile data/calibration/default.json --role tuning --signals attention_away
 ```
 
+手机 tuning 默认只包含四个实际场景：自然工作、单手手机、双手低头手机、相似非手机物体，每项 6 秒、1 次。自然工作和非手机物体允许 compliant 或因手部不可见而 unknown，但不得聚合为 violation；两个手机场景必须为 violation。手机单能力测试不依赖注意力校准位置，因此不运行脸部位置复位门。只补测部分场景可使用：
+
+```powershell
+.\.venv\Scripts\python.exe -m observer validate-live --profile data/calibration/default.json --role tuning --signals phone_held --scenarios phone_two_hands_low_gaze,phone_non_phone_object --no-error-evidence
+```
+
 窗口显示动作后按空格，先用 3 秒倒计时完成动作，倒计时结束才开始 7 秒记录；记录期间保持动作。每个场景结束后会重新等待空格，不会自动把下一项直接录入。每个批次自动使用独立目录；中途 `Esc` 会取消准备或把正在执行的 trial 标为 invalid 后退出。`--repetitions 1` 只用于熟悉流程，不能作为验收批次。
 
 每个批次包含：

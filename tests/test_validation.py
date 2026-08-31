@@ -5,6 +5,8 @@ from pathlib import Path
 
 import numpy as np
 
+from observer.live_validation import Scenario, scenario_accepted_states
+from observer.observations import SignalState
 from observer.validation import (
     ErrorEvidenceStore,
     EvidencePolicy,
@@ -31,6 +33,19 @@ def trial(trial_id: str, truth: str, prediction: str) -> TrialRecord:
 
 
 class ValidationTests(unittest.TestCase):
+    def test_scenario_can_accept_safe_unknown_without_accepting_violation(self) -> None:
+        scenario = Scenario(
+            "natural",
+            "phone_held",
+            SignalState.COMPLIANT,
+            "work naturally",
+            accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN),
+        )
+        accepted = scenario_accepted_states(scenario)
+        self.assertIn(SignalState.COMPLIANT, accepted)
+        self.assertIn(SignalState.UNKNOWN, accepted)
+        self.assertNotIn(SignalState.VIOLATION, accepted)
+
     def test_manifest_records_same_session_alignment(self) -> None:
         manifest = new_batch_manifest(
             batch_id="tuning-test",

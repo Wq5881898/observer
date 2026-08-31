@@ -343,6 +343,7 @@ def _validate_live(
     profile_path: Path,
     dataset_role: str,
     signals: str,
+    scenarios: str | None,
     output_root: Path,
     repetitions: int | None,
     save_error_evidence: bool,
@@ -352,12 +353,16 @@ def _validate_live(
     config = load_config(config_path)
     models = verify_model_directory(models_dir)
     signal_names = tuple(name.strip() for name in signals.split(",") if name.strip())
+    scenario_ids = tuple(
+        name.strip() for name in (scenarios or "").split(",") if name.strip()
+    )
     batch_directory = run_live_validation(
         config,
         models,
         profile_path,
         dataset_role=dataset_role,
         signal_names=signal_names,
+        scenario_ids=scenario_ids,
         output_root=output_root,
         repetitions_override=repetitions,
         save_error_evidence=save_error_evidence,
@@ -486,6 +491,10 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="comma-separated: away,phone_held,posture_deviation,attention_away",
     )
+    live_parser.add_argument(
+        "--scenarios",
+        help="optional comma-separated scenario IDs for a focused rerun",
+    )
     live_parser.add_argument("--output-root", type=Path, default=Path("data/validation"))
     live_parser.add_argument(
         "--repetitions", type=int, help="override only for dry runs; omit for protocol counts"
@@ -556,6 +565,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.profile,
             args.role,
             args.signals,
+            args.scenarios,
             args.output_root,
             args.repetitions,
             args.save_error_evidence,
