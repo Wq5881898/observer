@@ -113,6 +113,25 @@ class PerceptionTests(unittest.TestCase):
         self.assertIn("shoulder_slope", result.values)
         self.assertIn("torso_lean", result.values)
 
+    def test_posture_keeps_face_only_features_when_shoulders_are_cropped(self) -> None:
+        face = [Landmark(0.5, 0.5) for _ in range(478)]
+        face[0] = Landmark(0.35, 0.35)
+        face[10] = Landmark(0.65, 0.65)
+        face[33] = Landmark(0.42, 0.45)
+        face[263] = Landmark(0.58, 0.45)
+        face[1] = Landmark(0.50, 0.53)
+        pose = [Landmark(0.5, 0.5) for _ in range(25)]
+        pose[11].visibility = 0.1
+        pose[12].visibility = 0.1
+
+        result = extract_posture_features(pose, face)
+
+        self.assertTrue(result.observable)
+        self.assertIn("face_head_pitch", result.values)
+        self.assertIn("face_head_roll", result.values)
+        self.assertIn("face_scale", result.values)
+        self.assertNotIn("shoulder_slope", result.values)
+
     def test_phone_tracker_confirms_and_expires_candidate(self) -> None:
         tracker = PhoneCandidateTracker(confirmation_hits=2, retain_seconds=0.2)
         phone = PhoneCandidate(NormalizedBox(0.4, 0.4, 0.1, 0.2), 0.9)

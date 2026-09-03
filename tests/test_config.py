@@ -11,9 +11,13 @@ class ConfigTests(unittest.TestCase):
         self.assertLess(config.inference.object_fps, config.inference.face_fps)
         self.assertEqual(config.inference.face_detection_confidence, 0.35)
         self.assertEqual(config.resources.max_inference_workers, 3)
-        self.assertEqual(len(config.rules), 4)
+        self.assertEqual(len(config.rules), 5)
         phone = next(rule for rule in config.rules if rule.rule_id == "phone_held")
         self.assertEqual(phone.trigger_after_seconds, 10.0)
+        ergonomic = next(rule for rule in config.rules if rule.rule_id == "ergonomic_risk")
+        self.assertEqual(ergonomic.trigger_after_seconds, 30.0)
+        self.assertEqual(ergonomic.initial_penalty_points, 0.0)
+        self.assertEqual(ergonomic.maximum_penalty_points, 0.0)
 
     def test_unknown_section_is_rejected(self) -> None:
         with self.assertRaises(ValueError):

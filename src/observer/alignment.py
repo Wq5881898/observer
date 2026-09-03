@@ -16,6 +16,9 @@ from observer.vision import MediapipeVisionProbe
 
 
 FACE_CONTEXT_FEATURES = ("face_center_x", "face_center_y", "face_scale")
+FACE_ALIGNMENT_TARGET_X = 0.5
+FACE_ALIGNMENT_MIN_HORIZONTAL_TOLERANCE = 0.05
+FACE_ALIGNMENT_MIN_VERTICAL_TOLERANCE = 0.06
 
 
 class AlignmentCancelled(RuntimeError):
@@ -54,6 +57,7 @@ class AlignmentAssessment:
     tolerance_x: float | None
     tolerance_y: float | None
     tolerance_scale: float | None
+    scale_required: bool = True
 
 
 @dataclass(slots=True)
@@ -110,8 +114,32 @@ class AlignmentResult:
     final_context_z: float
     posture_state: str
     attention_session_baseline: dict[str, float] = field(default_factory=dict)
+    session_face_scale: float | None = None
     frames_saved: int = 0
     verification: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class AttentionBaselineResult:
+    elapsed_seconds: float
+    stable_seconds: float
+    observations: int
+    values: dict[str, float]
+
+
+def attention_session_baseline_from_samples(
+    samples: list[FeatureVector],
+) -> dict[str, float]:
+    """Return a robust neutral head-pose baseline from valid live samples."""
+
+    names = ("head_yaw_proxy", "head_pitch_proxy")
+    values = {
+        name: [sample.values[name] for sample in samples if name in sample.values]
+        for name in names
+    }
+    if not samples or any(not entries for entries in values.values()):
+        raise ValueError("attention baseline samples are incomplete")
+    return {name: median(entries) for name, entries in values.items()}
 
 
 def assess_alignment(
@@ -120,6 +148,7 @@ def assess_alignment(
     posture_features: FeatureVector | None,
     *,
     require_posture: bool = True,
+    require_face_scale: bool = True,
 ) -> AlignmentAssessment:
     attention = profile.attention
     targets: dict[str, float] = {}
@@ -131,6 +160,23 @@ def assess_alignment(
                 f"calibration profile has no {name}", posture_state=SignalState.UNKNOWN
             )
         targets[name], scales[name] = context_statistics[name]
+
+    # The historical calibration x-position describes where the user happened
+    # to sit during calibration; it is not a screen-gaze anchor.  Requiring that
+    # narrow, possibly off-centre position made later sessions unnecessarily
+    # difficult.  Keep the calibrated vertical/scale context, but centre the
+    # horizontal guide and allow natural face-position bands.  The vertical
+    # minimum prevents ordinary changes in chair height or viewing distance
+    # from blocking a session when the full face and eyes remain observable.
+    targets["face_center_x"] = FACE_ALIGNMENT_TARGET_X
+    scales["face_center_x"] = max(
+        scales["face_center_x"],
+        FACE_ALIGNMENT_MIN_HORIZONTAL_TOLERANCE / attention.maximum_context_z,
+    )
+    scales["face_center_y"] = max(
+        scales["face_center_y"],
+        FACE_ALIGNMENT_MIN_VERTICAL_TOLERANCE / attention.maximum_context_z,
+    )
 
     posture_signal = (
         profile.posture.evaluate(posture_features)
@@ -146,6 +192,7 @@ def assess_alignment(
         "tolerance_x": scales["face_center_x"] * attention.maximum_context_z,
         "tolerance_y": scales["face_center_y"] * attention.maximum_context_z,
         "tolerance_scale": scales["face_scale"] * attention.maximum_context_z,
+        "scale_required": require_face_scale,
     }
     if attention_features is None:
         return AlignmentAssessment(
@@ -172,18 +219,20 @@ def assess_alignment(
         )
 
     current = {name: attention_features.values[name] for name in FACE_CONTEXT_FEATURES}
+    gated_context_features = ["face_center_x", "face_center_y"]
+    if require_face_scale:
+        gated_context_features.append("face_scale")
     context_z = max(
         abs(current[name] - targets[name]) / scales[name]
-        for name in FACE_CONTEXT_FEATURES
+        for name in gated_context_features
     )
-    context_aligned = context_z <= attention.maximum_context_z
     posture_aligned = posture_state is SignalState.COMPLIANT
     position_aligned = all(
         abs(current[name] - targets[name])
         <= scales[name] * attention.maximum_context_z
         for name in ("face_center_x", "face_center_y")
     )
-    scale_aligned = (
+    scale_aligned = not require_face_scale or (
         abs(current["face_scale"] - targets["face_scale"])
         <= scales["face_scale"] * attention.maximum_context_z
     )
@@ -204,7 +253,7 @@ def assess_alignment(
     else:
         reason = "aligned - hold still and look at the center dot"
     return AlignmentAssessment(
-        context_aligned and (posture_aligned or not require_posture),
+        position_aligned and scale_aligned and (posture_aligned or not require_posture),
         reason,
         context_z=context_z,
         current_x=current["face_center_x"],
@@ -281,6 +330,7 @@ def guide_alignment(
     stable_seconds: float = 3.0,
     timeout_seconds: float = 120.0,
     require_posture: bool = False,
+    require_face_scale: bool = True,
 ) -> AlignmentResult:
     """Run the alignment gate inside an already-open camera and probe session."""
 
@@ -306,6 +356,7 @@ def guide_alignment(
         "head_yaw_proxy": [],
         "head_pitch_proxy": [],
     }
+    face_scale_values: list[float] = []
     while True:
         now = time.monotonic()
         if now - started >= timeout_seconds:
@@ -369,6 +420,7 @@ def guide_alignment(
             probe.latest_smoothed_attention_features,
             probe.latest_posture_features,
             require_posture=require_posture,
+            require_face_scale=require_face_scale,
         )
         alignment_reason_counts[final_assessment.reason] = (
             alignment_reason_counts.get(final_assessment.reason, 0) + 1
@@ -397,9 +449,12 @@ def guide_alignment(
             }.issubset(features.values):
                 for name in baseline_values:
                     baseline_values[name].append(features.values[name])
+                if "face_scale" in features.values:
+                    face_scale_values.append(features.values["face_scale"])
         elif held_seconds == 0.0:
             for values in baseline_values.values():
                 values.clear()
+            face_scale_values.clear()
         longest_stable_seconds = max(longest_stable_seconds, held_seconds)
         if final_assessment.context_z is not None and (
             best_assessment is None
@@ -432,7 +487,138 @@ def guide_alignment(
                 final_context_z=round(final_assessment.context_z, 3),
                 posture_state=final_assessment.posture_state.value,
                 attention_session_baseline=baseline,
+                session_face_scale=(
+                    median(face_scale_values) if face_scale_values else None
+                ),
             )
+
+
+def guide_attention_session_baseline(
+    camera: CameraWorker,
+    probe: MediapipeVisionProbe,
+    *,
+    stable_seconds: float = 3.0,
+    timeout_seconds: float = 60.0,
+) -> AttentionBaselineResult:
+    """Capture neutral head pose at the user's natural working distance.
+
+    This setup deliberately does not enforce the calibration-time face scale or
+    shoulder visibility. It only requires a usable face/eye observation while
+    the user follows the instruction to look at the screen centre.
+    """
+
+    if stable_seconds <= 0 or timeout_seconds <= 0:
+        raise ValueError("attention baseline durations must be positive")
+    import cv2
+
+    window = "Observer session setup - no recording"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    if hasattr(cv2, "WND_PROP_TOPMOST"):
+        cv2.setWindowProperty(window, cv2.WND_PROP_TOPMOST, 1)
+
+    started = time.monotonic()
+    valid_since: float | None = None
+    samples: list[FeatureVector] = []
+    last_sequence = 0
+    previous_face_runs = probe.measurements.face.runs
+    try:
+        while True:
+            now = time.monotonic()
+            if now - started >= timeout_seconds:
+                raise RuntimeError(
+                    "session attention setup timed out; keep the full face visible "
+                    "and look at the screen centre"
+                )
+            snapshot = camera.buffer.latest(after_sequence=last_sequence)
+            if snapshot is None:
+                _check_cancel(cv2.waitKeyEx(10))
+                continue
+            last_sequence = snapshot.sequence
+            probe.process_due(
+                snapshot.frame,
+                snapshot.captured_monotonic,
+                frozenset({"face"}),
+            )
+            feature = probe.latest_smoothed_attention_features
+            quality = probe.latest_quality
+            valid = (
+                feature is not None
+                and not feature.reasons
+                and quality is not None
+                and quality.observable
+                and {
+                    "head_yaw_proxy",
+                    "head_pitch_proxy",
+                }.issubset(feature.values)
+            )
+            if valid:
+                if valid_since is None:
+                    valid_since = now
+                    samples.clear()
+                if probe.measurements.face.runs > previous_face_runs:
+                    samples.append(feature)
+                    previous_face_runs = probe.measurements.face.runs
+            else:
+                valid_since = None
+                samples.clear()
+
+            held = 0.0 if valid_since is None else now - valid_since
+            preview = cv2.flip(snapshot.frame, 1)
+            cv2.rectangle(preview, (0, 0), (preview.shape[1], 112), (20, 20, 20), -1)
+            cv2.putText(
+                preview,
+                "SESSION SETUP - NO RECORDING",
+                (18, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (0, 220, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                preview,
+                "Sit naturally. Look at the SCREEN CENTER.",
+                (18, 66),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.56,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            status = (
+                f"Hold still {min(held, stable_seconds):.1f}/{stable_seconds:.1f}s"
+                if valid
+                else "Full face and both eyes must be visible"
+            )
+            cv2.putText(
+                preview,
+                status,
+                (18, 98),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                (80, 255, 80) if valid else (0, 220, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.imshow(window, preview)
+            _check_cancel(cv2.waitKeyEx(1))
+            if held >= stable_seconds and samples:
+                baseline = attention_session_baseline_from_samples(samples)
+                probe.set_attention_session_baseline(
+                    FeatureVector("attention", baseline)
+                )
+                return AttentionBaselineResult(
+                    elapsed_seconds=round(now - started, 3),
+                    stable_seconds=stable_seconds,
+                    observations=len(samples),
+                    values=baseline,
+                )
+    finally:
+        try:
+            cv2.destroyWindow(window)
+        except cv2.error:
+            pass
 
 
 def verify_aligned_baseline(
@@ -617,7 +803,9 @@ def _draw_alignment_overlay(
     lines = ["Align face with the box and look at the yellow dot"]
     if assessment.context_z is not None:
         size_delta = assessment.current_scale - assessment.target_scale
-        if abs(size_delta) <= (assessment.tolerance_scale or 0.0):
+        if not assessment.scale_required:
+            size_status = "NATURAL DISTANCE OK"
+        elif abs(size_delta) <= (assessment.tolerance_scale or 0.0):
             size_status = "SIZE OK"
         elif size_delta > 0:
             size_status = "TOO CLOSE - MOVE FARTHER"

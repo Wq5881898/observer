@@ -1,8 +1,12 @@
 import unittest
+from dataclasses import replace
+from tempfile import TemporaryDirectory
+from pathlib import Path
 
 from observer.alignment import (
     AlignmentStability,
     _count_feature_observation,
+    attention_session_baseline_from_samples,
     assess_alignment,
 )
 from observer.calibration import (
@@ -12,7 +16,20 @@ from observer.calibration import (
     FeatureStats,
     PostureCalibration,
 )
-from observer.cli import build_parser
+from observer.cli import (
+    ATTENTION_BOUNDARY_CUES,
+    ATTENTION_MINUTE_CUES,
+    GUIDED_DEBUG_CUES,
+    _evidence_capture_kind,
+    _finalize_debug_video,
+    _finish_violation_intervals,
+    _finalize_guided_case_summaries,
+    _guided_case_metadata,
+    _guided_debug_cue,
+    _record_guided_case_observation,
+    _track_violation_interval,
+    build_parser,
+)
 from observer.observations import SignalState
 from observer.perception import FeatureVector, QualityThresholds
 
@@ -84,6 +101,155 @@ class AlignmentTests(unittest.TestCase):
         self.assertEqual(args.verify_seconds, 10.0)
         self.assertFalse(args.require_posture)
 
+    def test_vision_smoke_exposes_opt_in_evidence_and_report_paths(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "vision-smoke",
+                "--evidence-dir",
+                "data/evidence/test",
+                "--report",
+                "data/reports/test.json",
+                "--debug-video",
+                "data/debug/test.mp4",
+                "--guided-debug-cues",
+            ]
+        )
+
+        self.assertEqual(args.evidence_dir, Path("data/evidence/test"))
+        self.assertEqual(args.report, Path("data/reports/test.json"))
+        self.assertEqual(args.debug_video, Path("data/debug/test.mp4"))
+        self.assertTrue(args.guided_debug_cues)
+
+    def test_guided_debug_cues_have_objective_action_durations(self) -> None:
+        self.assertEqual(_guided_debug_cue(219.9)[0], "normal_1")
+        cue_id, instruction, remaining = _guided_debug_cue(220.0)
+        self.assertEqual(cue_id, "outside_left")
+        self.assertIn("LEFT", instruction)
+        self.assertEqual(remaining, 12.0)
+        self.assertEqual(_guided_debug_cue(231.9)[0], "outside_left")
+        self.assertEqual(_guided_debug_cue(232.0)[0], "normal_2")
+        self.assertEqual(_guided_debug_cue(245.0)[0], "phone")
+        self.assertIn("NO PHONE", _guided_debug_cue(180.0)[1])
+        self.assertIn("PHONE", _guided_debug_cue(245.0)[1])
+        self.assertNotIn("NO PHONE", _guided_debug_cue(245.0)[1])
+        self.assertTrue(all(len(cue[3]) <= 48 for cue in GUIDED_DEBUG_CUES))
+
+    def test_attention_minute_plan_separates_positive_and_negative_controls(self) -> None:
+        args = build_parser().parse_args(
+            ["vision-smoke", "--guided-debug-plan", "attention-minute"]
+        )
+        self.assertEqual(args.guided_debug_plan, "attention-minute")
+        self.assertEqual(
+            _guided_debug_cue(10.0, ATTENTION_MINUTE_CUES)[0],
+            "outside_left_down",
+        )
+        self.assertEqual(
+            _guided_debug_cue(35.0, ATTENTION_MINUTE_CUES)[0],
+            "near_lower_inside",
+        )
+        self.assertEqual(_guided_debug_cue(60.0, ATTENTION_MINUTE_CUES)[0], "complete")
+
+    def test_attention_boundary_plan_has_unscored_preparation_and_scored_holds(self) -> None:
+        args = build_parser().parse_args(
+            ["vision-smoke", "--guided-debug-plan", "attention-boundary"]
+        )
+
+        self.assertEqual(args.guided_debug_plan, "attention-boundary")
+        self.assertEqual(ATTENTION_BOUNDARY_CUES[-1][1], 151.0)
+        self.assertEqual(_guided_debug_cue(0.0, ATTENTION_BOUNDARY_CUES)[0], "prep_a01")
+        self.assertEqual(_guided_debug_cue(3.0, ATTENTION_BOUNDARY_CUES)[0], "score_a01")
+        self.assertEqual(_guided_debug_cue(68.0, ATTENTION_BOUNDARY_CUES)[0], "score_a06")
+        self.assertEqual(_guided_debug_cue(98.0, ATTENTION_BOUNDARY_CUES)[0], "score_a08")
+        self.assertEqual(_guided_debug_cue(126.0, ATTENTION_BOUNDARY_CUES)[0], "score_a10")
+        self.assertEqual(_guided_debug_cue(151.0, ATTENTION_BOUNDARY_CUES)[0], "complete")
+        self.assertFalse(_guided_case_metadata("prep_a02")["scored"])
+        self.assertTrue(_guided_case_metadata("score_a02")["scored"])
+        self.assertEqual(
+            _guided_case_metadata("score_a02")["expected_state"], "violation"
+        )
+
+    def test_attention_boundary_summary_excludes_preparation_and_keeps_exact_runs(self) -> None:
+        summaries = {}
+        active = {}
+        prep = _guided_case_metadata("prep_a02")
+        scored = _guided_case_metadata("score_a02")
+        _record_guided_case_observation(summaries, active, prep, 14.0, "compliant")
+        _record_guided_case_observation(summaries, active, scored, 16.0, "violation")
+        _record_guided_case_observation(summaries, active, scored, 17.0, "violation")
+        _record_guided_case_observation(summaries, active, scored, 18.0, "unknown")
+        _record_guided_case_observation(summaries, active, scored, 19.0, "violation")
+
+        rendered = _finalize_guided_case_summaries(summaries, active)
+
+        self.assertEqual(len(rendered), 1)
+        self.assertEqual(rendered[0]["case_id"], "A02")
+        self.assertEqual(rendered[0]["observation_count"], 4)
+        self.assertEqual(rendered[0]["state_counts"], {"violation": 3, "unknown": 1})
+        self.assertEqual(rendered[0]["longest_exact_violation_seconds"], 2.0)
+
+    def test_debug_video_report_includes_timestamp_index_and_hashes(self) -> None:
+        with TemporaryDirectory() as directory:
+            video = Path(directory) / "test.mp4"
+            video.write_bytes(b"temporary-video")
+
+            result = _finalize_debug_video(video, [0.1, 0.2], 15.0)
+
+            self.assertTrue(result["temporary"])
+            self.assertTrue(result["review_then_delete"])
+            self.assertEqual(result["frame_count"], 2)
+            self.assertTrue(Path(result["timestamps_path"]).exists())
+            self.assertEqual(len(result["sha256"]), 64)
+
+    def test_natural_monitor_records_continuous_violation_intervals(self) -> None:
+        active = {}
+        completed = {}
+        _track_violation_interval("attention_away", "violation", 10.0, active, completed)
+        _track_violation_interval("attention_away", "compliant", 10.2, active, completed)
+        _track_violation_interval("attention_away", "violation", 10.4, active, completed)
+        _track_violation_interval("attention_away", "compliant", 11.0, active, completed)
+        _finish_violation_intervals(active, completed, 11.0)
+
+        self.assertEqual(len(completed["attention_away"]), 1)
+        self.assertEqual(completed["attention_away"][0]["start_seconds"], 10.0)
+        self.assertEqual(completed["attention_away"][0]["end_seconds"], 10.4)
+
+    def test_sustained_violation_reserves_evidence_after_regular_cap(self) -> None:
+        active = {
+            "attention_away": {
+                "start_seconds": 10.0,
+                "last_violation_seconds": 18.1,
+            }
+        }
+
+        kind = _evidence_capture_kind(
+            "attention_away",
+            "violation",
+            18.1,
+            active,
+            {"attention_away": 3},
+            {"attention_away": 17.0},
+            set(),
+            {"attention_away": 8.0},
+            100.0,
+        )
+
+        self.assertEqual(kind, "sustained_threshold")
+
+    def test_sustained_evidence_is_only_reserved_once(self) -> None:
+        kind = _evidence_capture_kind(
+            "attention_away",
+            "violation",
+            20.0,
+            {"attention_away": {"start_seconds": 10.0, "last_violation_seconds": 20.0}},
+            {"attention_away": 3},
+            {"attention_away": 19.0},
+            {"attention_away"},
+            {"attention_away": 8.0},
+            100.0,
+        )
+
+        self.assertIsNone(kind)
+
     def test_matching_face_context_and_posture_are_aligned(self) -> None:
         attention = FeatureVector(
             "attention",
@@ -93,8 +259,78 @@ class AlignmentTests(unittest.TestCase):
         result = assess_alignment(profile(), attention, neutral_posture())
 
         self.assertTrue(result.aligned)
-        self.assertEqual(result.context_z, 0.0)
+        self.assertAlmostEqual(result.context_z or 0.0, 2.0)
+        self.assertEqual(result.target_x, 0.5)
+        self.assertAlmostEqual(result.tolerance_x or 0.0, 0.05)
         self.assertIs(result.posture_state, SignalState.COMPLIANT)
+
+    def test_alignment_does_not_copy_an_off_center_calibration_position(self) -> None:
+        attention = FeatureVector(
+            "attention",
+            {"face_center_x": 0.50, "face_center_y": 0.66, "face_scale": 0.30},
+        )
+
+        result = assess_alignment(profile(), attention, neutral_posture())
+
+        self.assertTrue(result.aligned)
+        self.assertEqual(result.target_x, 0.5)
+        self.assertAlmostEqual(result.tolerance_x or 0.0, 0.05)
+
+    def test_natural_session_alignment_does_not_force_historical_face_scale(self) -> None:
+        attention = FeatureVector(
+            "attention",
+            {"face_center_x": 0.50, "face_center_y": 0.66, "face_scale": 0.42},
+        )
+
+        result = assess_alignment(
+            profile(),
+            attention,
+            neutral_posture(),
+            require_face_scale=False,
+        )
+
+        self.assertTrue(result.aligned)
+        self.assertFalse(result.scale_required)
+
+    def test_natural_vertical_shift_with_complete_face_is_accepted(self) -> None:
+        calibration = profile()
+        calibration = replace(
+            calibration,
+            attention=replace(
+                calibration.attention,
+                feature_scales=(0.01, 0.001, 0.01, 0.2),
+            ),
+        )
+        attention = FeatureVector(
+            "attention",
+            {"face_center_x": 0.50, "face_center_y": 0.715, "face_scale": 0.47},
+        )
+
+        result = assess_alignment(
+            calibration,
+            attention,
+            neutral_posture(),
+            require_face_scale=False,
+        )
+
+        self.assertTrue(result.aligned)
+        self.assertAlmostEqual(result.tolerance_y or 0.0, 0.06)
+
+    def test_large_vertical_shift_remains_blocked(self) -> None:
+        attention = FeatureVector(
+            "attention",
+            {"face_center_x": 0.50, "face_center_y": 0.80, "face_scale": 0.47},
+        )
+
+        result = assess_alignment(
+            profile(),
+            attention,
+            neutral_posture(),
+            require_face_scale=False,
+        )
+
+        self.assertFalse(result.aligned)
+        self.assertIn("position box", result.reason)
 
     def test_repeatable_face_shift_is_not_accepted_as_aligned(self) -> None:
         attention = FeatureVector(
@@ -199,6 +435,26 @@ class AlignmentTests(unittest.TestCase):
         stability.update(11.0, None)
         self.assertEqual(stability.update(11.6, None), (0.0, False))
         self.assertEqual(stability.update(12.0, True), (0.0, False))
+
+    def test_attention_session_baseline_uses_robust_medians(self) -> None:
+        samples = [
+            FeatureVector(
+                "attention",
+                {"head_yaw_proxy": yaw, "head_pitch_proxy": pitch},
+            )
+            for yaw, pitch in ((0.1, 0.2), (0.11, 0.21), (2.0, -3.0))
+        ]
+
+        baseline = attention_session_baseline_from_samples(samples)
+
+        self.assertAlmostEqual(baseline["head_yaw_proxy"], 0.11)
+        self.assertAlmostEqual(baseline["head_pitch_proxy"], 0.2)
+
+    def test_attention_session_baseline_rejects_incomplete_samples(self) -> None:
+        with self.assertRaises(ValueError):
+            attention_session_baseline_from_samples(
+                [FeatureVector("attention", {"head_yaw_proxy": 0.1})]
+            )
 
 
 if __name__ == "__main__":

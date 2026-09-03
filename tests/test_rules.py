@@ -78,6 +78,34 @@ class SustainedRuleTests(unittest.TestCase):
         self.assertEqual(engine.ledger.total_points, 7.0)
         self.assertEqual(engine.ledger.score, 93.0)
 
+    def test_ergonomic_event_is_recordable_without_efficiency_penalty(self) -> None:
+        config = RuleConfig(
+            "ergonomic_risk",
+            "ergonomic_risk",
+            trigger_after_seconds=3.0,
+            initial_penalty_points=0.0,
+            repeat_penalty_points=0.0,
+            maximum_penalty_points=0.0,
+        )
+        engine = RuleEngine((config,))
+        result = None
+        for second in range(4):
+            result = engine.process(
+                Observation(
+                    float(second),
+                    {
+                        "ergonomic_risk": SignalValue.violation(
+                            reason="shoulder_imbalance"
+                        )
+                    },
+                )
+            )
+
+        self.assertIsNotNone(result)
+        self.assertIn(ActionKind.ACTIVATED, [action.kind for action in result.actions])
+        self.assertEqual(engine.ledger.total_points, 0.0)
+        self.assertEqual(engine.ledger.score, 100.0)
+
     def test_large_observation_gap_breaks_pending_continuity(self) -> None:
         rule = SustainedRule(self.config)
         rule.update(observation(0.0, SignalValue.violation()))

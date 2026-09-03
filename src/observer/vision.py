@@ -274,13 +274,21 @@ class MediapipeVisionProbe:
                 )
             if not quality.observable:
                 posture_signal = self._unknown_quality_signal(quality)
+                ergonomic_signal = self._unknown_quality_signal(quality)
             elif self._calibration is None:
                 posture_signal = self._unknown_signal("posture calibration not available")
+                ergonomic_signal = self._unknown_signal(
+                    "ergonomic posture calibration not available"
+                )
             else:
                 posture_signal = self._calibration.posture.evaluate(
                     self._last_smoothed_posture_features
                 )
+                ergonomic_signal = self._calibration.posture.evaluate_ergonomic_risk(
+                    self._last_smoothed_posture_features
+                )
             self._fusion.update_posture(now_monotonic, posture_signal)
+            self._fusion.update_ergonomic_posture(now_monotonic, ergonomic_signal)
             self._next_due["pose"] = now_monotonic + 1.0 / self._rates.pose_fps
 
         if due["object"]:

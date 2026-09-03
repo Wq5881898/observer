@@ -31,8 +31,19 @@ class SignalValue:
         return cls(SignalState.COMPLIANT, confidence=confidence, metrics=metrics)
 
     @classmethod
-    def violation(cls, confidence: float | None = None, **metrics: float) -> "SignalValue":
-        return cls(SignalState.VIOLATION, confidence=confidence, metrics=metrics)
+    def violation(
+        cls,
+        confidence: float | None = None,
+        *,
+        reason: str | None = None,
+        **metrics: float,
+    ) -> "SignalValue":
+        return cls(
+            SignalState.VIOLATION,
+            confidence=confidence,
+            reason=reason,
+            metrics=metrics,
+        )
 
     @classmethod
     def unknown(cls, reason: str, **metrics: float) -> "SignalValue":

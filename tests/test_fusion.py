@@ -88,6 +88,37 @@ class ObservationFusionTests(unittest.TestCase):
         self.assertIs(observation.signal("attention_away").state, SignalState.COMPLIANT)
         self.assertIs(observation.signal("posture_deviation").state, SignalState.VIOLATION)
 
+    def test_ergonomic_risk_combines_posture_and_head_gaze_conflict(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_quality(10.0, True, None)
+        fusion.update_attention(
+            10.0, SignalValue.unknown("head pose and iris gaze conflict")
+        )
+        fusion.update_ergonomic_posture(
+            10.0,
+            SignalValue.violation(
+                confidence=0.8,
+                reason="shoulder_imbalance,head_tilt",
+            ),
+        )
+
+        signal = fusion.build(10.1).signal("ergonomic_risk")
+
+        self.assertIs(signal.state, SignalState.VIOLATION)
+        self.assertIn("eye_head_compensation", signal.reason or "")
+        self.assertIn("shoulder_imbalance", signal.reason or "")
+
+    def test_ergonomic_risk_can_be_compliant_independently(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_quality(10.0, True, None)
+        fusion.update_ergonomic_posture(
+            10.0, SignalValue.compliant(confidence=0.9)
+        )
+
+        signal = fusion.build(10.1).signal("ergonomic_risk")
+
+        self.assertIs(signal.state, SignalState.COMPLIANT)
+
     def test_failed_quality_gate_suppresses_violations(self) -> None:
         fusion = ObservationFusion()
         fusion.update_quality(10.0, False, "frame too dark")

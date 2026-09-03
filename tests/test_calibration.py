@@ -20,6 +20,8 @@ from observer.calibration_workflow import (
     ATTENTION_CALIBRATION_POINTS,
     ATTENTION_VALIDATION_POINTS,
     _attention_validation_rmse_by_point,
+    _features_are_warming_up,
+    _precheck_failure_message,
 )
 from observer.observations import SignalState
 from observer.perception import FeatureVector
@@ -54,6 +56,24 @@ def attention_samples() -> list[AttentionSample]:
 class CalibrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.environment = EnvironmentFingerprint(0, 640, 480, True, 1920, 1080, 100)
+
+    def test_dark_missing_face_precheck_mentions_possible_camera_occupancy(self) -> None:
+        message = _precheck_failure_message(
+            {"frame too dark": 5, "face or iris landmarks missing": 5}
+        )
+        self.assertIn("occupied", message)
+        self.assertIn("privacy shutter", message)
+
+    def test_precheck_excludes_mandatory_temporal_warmup(self) -> None:
+        warming = FeatureVector(
+            "posture",
+            {},
+            reasons=("posture temporal smoother is warming up (1/5)",),
+        )
+        ready = FeatureVector("attention", {"iris_a_x": 0.5})
+
+        self.assertTrue(_features_are_warming_up(ready, warming))
+        self.assertFalse(_features_are_warming_up(ready, None))
 
     def test_posture_uses_two_group_vote_or_corroborated_lateral_lean(self) -> None:
         calibration = fit_posture_calibration(
@@ -94,13 +114,151 @@ class CalibrationTests(unittest.TestCase):
         self.assertIs(corroborated_alignment.state, SignalState.VIOLATION)
         self.assertIs(two_groups.state, SignalState.VIOLATION)
 
+    def test_face_only_posture_is_observable_without_shoulders(self) -> None:
+        samples = [
+            FeatureVector(
+                "posture",
+                {
+                    "face_head_pitch": 0.20 + (index % 3 - 1) * 0.001,
+                    "face_head_roll": (index % 5 - 2) * 0.001,
+                    "face_center_x": 0.50 + (index % 3 - 1) * 0.001,
+                    "face_center_y": 0.50 + (index % 5 - 2) * 0.001,
+                    "face_scale": 0.30 + (index % 3 - 1) * 0.001,
+                },
+            )
+            for index in range(40)
+        ]
+        calibration = fit_posture_calibration(samples, planned_sample_count=40)
+
+        compliant = calibration.evaluate(samples[0])
+        violation = calibration.evaluate(
+            FeatureVector(
+                "posture",
+                {
+                    **samples[0].values,
+                    "face_head_pitch": 0.50,
+                    "face_head_roll": 0.30,
+                },
+            )
+        )
+
+        self.assertIs(compliant.state, SignalState.COMPLIANT)
+        self.assertEqual(compliant.metrics["posture_head_groups_observable"], 2.0)
+        self.assertEqual(compliant.metrics["posture_upper_body_groups_observable"], 0.0)
+        self.assertIs(violation.state, SignalState.VIOLATION)
+
+    def test_posture_calibration_retains_optional_shoulder_features(self) -> None:
+        samples = []
+        for index in range(40):
+            values = {
+                "face_head_pitch": 0.20 + (index % 3 - 1) * 0.001,
+                "face_head_roll": (index % 5 - 2) * 0.001,
+                "face_center_x": 0.50 + (index % 3 - 1) * 0.001,
+                "face_center_y": 0.50 + (index % 5 - 2) * 0.001,
+                "face_scale": 0.30 + (index % 3 - 1) * 0.001,
+            }
+            if index < 35:
+                values.update(
+                    {
+                        "shoulder_slope": (index % 5 - 2) * 0.001,
+                        "head_offset_x": (index % 3 - 1) * 0.001,
+                        "head_offset_y": -1.0 + (index % 3 - 1) * 0.001,
+                        "shoulder_width": 0.30 + (index % 3 - 1) * 0.001,
+                    }
+                )
+            samples.append(FeatureVector("posture", values))
+
+        calibration = fit_posture_calibration(samples, planned_sample_count=40)
+
+        self.assertIn("face_head_pitch", calibration.stats)
+        self.assertIn("shoulder_width", calibration.stats)
+        self.assertEqual(calibration.stats["shoulder_width"].sample_count, 35)
+
+    def test_absolute_distance_change_does_not_vote_as_bad_posture(self) -> None:
+        samples = [
+            FeatureVector(
+                "posture",
+                {
+                    "face_head_pitch": 0.20 + (index % 3 - 1) * 0.001,
+                    "face_head_roll": (index % 5 - 2) * 0.001,
+                    "face_center_x": 0.50 + (index % 3 - 1) * 0.001,
+                    "face_center_y": 0.50 + (index % 5 - 2) * 0.001,
+                    "face_scale": 0.30 + (index % 3 - 1) * 0.001,
+                    "shoulder_slope": (index % 5 - 2) * 0.001,
+                    "head_offset_x": (index % 3 - 1) * 0.001,
+                    "head_offset_y": -1.0 + (index % 3 - 1) * 0.001,
+                    "shoulder_width": 0.30 + (index % 3 - 1) * 0.001,
+                    "face_to_shoulder_scale": 0.70 + (index % 3 - 1) * 0.001,
+                },
+            )
+            for index in range(40)
+        ]
+        calibration = fit_posture_calibration(samples, planned_sample_count=40)
+        closer = FeatureVector(
+            "posture",
+            {
+                **samples[0].values,
+                "face_center_x": 0.58,
+                "face_center_y": 0.68,
+                "face_scale": 0.43,
+                "shoulder_width": 0.48,
+                "head_offset_y": -0.70,
+                "face_to_shoulder_scale": 0.90,
+            },
+        )
+
+        result = calibration.evaluate(closer)
+        forward_lean = calibration.evaluate(
+            FeatureVector(
+                "posture",
+                {**closer.values, "face_head_pitch": 0.50},
+            )
+        )
+
+        self.assertIs(result.state, SignalState.COMPLIANT)
+        self.assertNotIn("posture_z_face_scale", result.metrics)
+        self.assertNotIn("posture_z_shoulder_width", result.metrics)
+        self.assertIs(forward_lean.state, SignalState.VIOLATION)
+        self.assertIn("forward_lean", forward_lean.reason or "")
+
+    def test_ergonomic_risk_is_independent_and_explains_categories(self) -> None:
+        samples = [
+            FeatureVector(
+                "posture",
+                {
+                    "face_head_pitch": 0.20 + (index % 3 - 1) * 0.001,
+                    "face_head_roll": (index % 5 - 2) * 0.001,
+                    "face_center_y": 0.50 + (index % 3 - 1) * 0.001,
+                    "shoulder_slope": (index % 5 - 2) * 0.001,
+                    "torso_lean": (index % 3 - 1) * 0.001,
+                },
+            )
+            for index in range(40)
+        ]
+        calibration = fit_posture_calibration(samples, planned_sample_count=40)
+
+        risk = calibration.evaluate_ergonomic_risk(
+            FeatureVector(
+                "posture",
+                {
+                    **samples[0].values,
+                    "face_head_roll": 0.30,
+                    "shoulder_slope": 0.30,
+                },
+            )
+        )
+
+        self.assertIs(risk.state, SignalState.VIOLATION)
+        self.assertIn("head_tilt", risk.reason or "")
+        self.assertIn("shoulder_imbalance", risk.reason or "")
+
     def test_attention_ridge_model_classifies_inside_and_outside(self) -> None:
         calibration = fit_attention_calibration(attention_samples())
         inside = calibration.evaluate(
             FeatureVector("attention", {"gaze_x": 0.5, "gaze_y": 0.5, "scale": 0.4})
         )
         outside = calibration.evaluate(
-            FeatureVector("attention", {"gaze_x": 1.3, "gaze_y": 0.5, "scale": 0.4})
+            FeatureVector("attention", {"gaze_x": 1.5, "gaze_y": 0.5, "scale": 0.4})
         )
         self.assertIs(inside.state, SignalState.COMPLIANT)
         self.assertIs(outside.state, SignalState.VIOLATION)
@@ -129,6 +287,50 @@ class CalibrationTests(unittest.TestCase):
         self.assertNotIn("eye_a_open", calibration.feature_names)
         self.assertNotIn("eye_b_open", calibration.feature_names)
         self.assertEqual(set(calibration.feature_names), {"gaze_x", "gaze_y"})
+
+    def test_production_attention_fit_zeros_head_and_context_coefficients(self) -> None:
+        samples = []
+        for index, (point_id, x, y) in enumerate(ATTENTION_POINTS_9):
+            samples.append(
+                AttentionSample(
+                    FeatureVector(
+                        "attention",
+                        {
+                            "iris_a_x": x,
+                            "iris_a_y": y,
+                            "iris_b_x": x + 0.01,
+                            "iris_b_y": y + 0.01,
+                            "head_yaw_proxy": (index - 4) * 0.02,
+                            "head_pitch_proxy": 0.2 + index * 0.01,
+                            "face_center_x": 0.5 + index * 0.005,
+                            "face_center_y": 0.5 + index * 0.004,
+                            "face_scale": 0.3 + index * 0.002,
+                        },
+                    ),
+                    x,
+                    y,
+                    point_id,
+                )
+            )
+
+        calibration = fit_attention_calibration(samples)
+
+        for name in (
+            "head_yaw_proxy",
+            "head_pitch_proxy",
+            "face_center_x",
+            "face_center_y",
+            "face_scale",
+        ):
+            index = calibration.feature_names.index(name) + 1
+            self.assertEqual(calibration.coefficients_x[index], 0.0)
+            self.assertEqual(calibration.coefficients_y[index], 0.0)
+        self.assertTrue(
+            any(
+                calibration.coefficients_x[calibration.feature_names.index(name) + 1]
+                for name in ("iris_a_x", "iris_a_y", "iris_b_x", "iris_b_y")
+            )
+        )
 
     def test_attention_validation_diagnostics_report_each_point(self) -> None:
         samples = attention_samples()
@@ -286,7 +488,7 @@ class CalibrationTests(unittest.TestCase):
             feature_names=("iris_a_x",),
             feature_means=(0.5,),
             feature_scales=(0.1,),
-            coefficients_x=(0.5, 0.1),
+            coefficients_x=(0.5, 0.2),
             coefficients_y=(0.5, 0.0),
             training_rmse=0.1,
             validation_rmse=0.1,
@@ -411,6 +613,172 @@ class CalibrationTests(unittest.TestCase):
                 screen_y=1.20,
             )
         )
+
+    def test_head_gaze_conflict_is_unknown_not_attention_violation(self) -> None:
+        calibration = AttentionCalibration(
+            feature_version="observer-c1-v1",
+            feature_names=("iris_a_y",),
+            feature_means=(0.5,),
+            feature_scales=(0.1,),
+            coefficients_x=(0.5, 0.0),
+            coefficients_y=(0.5, 0.1),
+            training_rmse=0.1,
+            validation_rmse=0.1,
+            valid_sample_count=9,
+            coverage=1.0,
+        )
+        signal = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "iris_a_y": 0.34,
+                    "head_yaw_proxy": 0.01,
+                    "head_pitch_proxy": 0.36,
+                },
+            ),
+            AttentionSessionBaseline(0.0, 0.2),
+        )
+
+        self.assertIs(signal.state, SignalState.UNKNOWN)
+        self.assertIn("conflict", signal.reason or "")
+
+    def test_horizontal_head_gaze_compensation_is_compliant(self) -> None:
+        calibration = AttentionCalibration(
+            feature_version="observer-c1-v1",
+            feature_names=("iris_a_x",),
+            feature_means=(0.5,),
+            feature_scales=(0.1,),
+            coefficients_x=(0.5, 0.2),
+            coefficients_y=(0.5, 0.0),
+            training_rmse=0.1,
+            validation_rmse=0.1,
+            valid_sample_count=9,
+            coverage=1.0,
+        )
+        signal = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "iris_a_x": 0.85,
+                    "head_yaw_proxy": 0.35,
+                    "head_pitch_proxy": 0.2,
+                },
+            ),
+            AttentionSessionBaseline(0.0, 0.2),
+        )
+
+        self.assertIs(signal.state, SignalState.COMPLIANT)
+        self.assertAlmostEqual(signal.metrics["attention_fused_screen_x"], 0.5)
+
+    def test_horizontal_head_and_gaze_agreement_is_violation(self) -> None:
+        calibration = AttentionCalibration(
+            feature_version="observer-c1-v1",
+            feature_names=("iris_a_x",),
+            feature_means=(0.5,),
+            feature_scales=(0.1,),
+            coefficients_x=(0.5, 0.2),
+            coefficients_y=(0.5, 0.0),
+            training_rmse=0.1,
+            validation_rmse=0.1,
+            valid_sample_count=9,
+            coverage=1.0,
+        )
+        baseline = AttentionSessionBaseline(0.0, 0.2)
+
+        left = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "iris_a_x": 0.25,
+                    "head_yaw_proxy": 0.35,
+                    "head_pitch_proxy": 0.2,
+                },
+            ),
+            baseline,
+        )
+        right = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "iris_a_x": 0.75,
+                    "head_yaw_proxy": -0.35,
+                    "head_pitch_proxy": 0.2,
+                },
+            ),
+            baseline,
+        )
+
+        self.assertIs(left.state, SignalState.VIOLATION)
+        self.assertIs(right.state, SignalState.VIOLATION)
+
+    def test_close_lower_screen_does_not_turn_vertical_drift_into_horizontal_violation(self) -> None:
+        calibration = AttentionCalibration(
+            feature_version="observer-c1-v1",
+            feature_names=("predicted_x", "predicted_y"),
+            feature_means=(0.0, 0.0),
+            feature_scales=(1.0, 1.0),
+            coefficients_x=(0.0, 1.0, 0.0),
+            coefficients_y=(0.0, 0.0, 1.0),
+            training_rmse=0.1,
+            validation_rmse=0.1,
+            valid_sample_count=9,
+            coverage=1.0,
+        )
+        baseline = AttentionSessionBaseline(0.0, 0.2)
+
+        close_inside = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "predicted_x": -0.12,
+                    "predicted_y": 1.40,
+                    "head_yaw_proxy": 0.18,
+                    "head_pitch_proxy": 0.23,
+                },
+            ),
+            baseline,
+        )
+        compensated = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "predicted_x": -0.12,
+                    "predicted_y": 1.40,
+                    "head_yaw_proxy": 0.23,
+                    "head_pitch_proxy": 0.23,
+                },
+            ),
+            baseline,
+        )
+        true_outside = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "predicted_x": -0.35,
+                    "predicted_y": 0.60,
+                    "head_yaw_proxy": 0.21,
+                    "head_pitch_proxy": 0.20,
+                },
+            ),
+            baseline,
+        )
+        strong_head_turn = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "predicted_x": 0.20,
+                    "predicted_y": 0.60,
+                    "head_yaw_proxy": 0.35,
+                    "head_pitch_proxy": 0.20,
+                },
+            ),
+            baseline,
+        )
+
+        self.assertIs(close_inside.state, SignalState.COMPLIANT)
+        self.assertIs(compensated.state, SignalState.COMPLIANT)
+        self.assertIs(true_outside.state, SignalState.VIOLATION)
+        self.assertIs(strong_head_turn.state, SignalState.VIOLATION)
 
     def test_profile_roundtrip_and_environment_guard(self) -> None:
         posture = fit_posture_calibration(

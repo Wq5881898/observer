@@ -11,6 +11,7 @@ from observer.observations import PhoneCandidate
 
 
 FEATURE_VERSION = "observer-c1-v1"
+POSTURE_FEATURE_VERSION = "observer-c1-posture-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,11 +332,43 @@ def extract_posture_features(
     face_landmarks: Sequence[Any] | None = None,
     thresholds: QualityThresholds | None = None,
 ) -> FeatureVector:
-    """Extract scale-normalized upper-body features from Pose and optional Face Mesh."""
+    """Extract layered face-only and optional upper-body posture features."""
 
     selected = thresholds or QualityThresholds()
+    values: dict[str, float] = {}
+    if face_landmarks is not None and len(face_landmarks) >= 478:
+        face_x = [float(point.x) for point in face_landmarks]
+        face_y = [float(point.y) for point in face_landmarks]
+        face_width = max(face_x) - min(face_x)
+        face_height = max(face_y) - min(face_y)
+        left_eye = face_landmarks[33]
+        right_eye = face_landmarks[263]
+        eye_dx = float(right_eye.x) - float(left_eye.x)
+        eye_dy = float(right_eye.y) - float(left_eye.y)
+        interocular = math.hypot(eye_dx, eye_dy)
+        if face_width > 1e-6 and face_height > 1e-6 and interocular > 1e-6:
+            eye_mid_x = (float(left_eye.x) + float(right_eye.x)) / 2.0
+            eye_mid_y = (float(left_eye.y) + float(right_eye.y)) / 2.0
+            nose = face_landmarks[1]
+            values.update(
+                {
+                    "face_head_pitch": (float(nose.y) - eye_mid_y) / face_height,
+                    "face_head_roll": eye_dy / interocular,
+                    "face_center_x": (min(face_x) + max(face_x)) / 2.0,
+                    "face_center_y": (min(face_y) + max(face_y)) / 2.0,
+                    "face_scale": math.sqrt(face_width * face_height),
+                }
+            )
+
     if pose_landmarks is None or len(pose_landmarks) < 25:
-        return FeatureVector("posture", {}, reasons=("pose landmarks missing",))
+        if values:
+            return FeatureVector("posture", values, version=POSTURE_FEATURE_VERSION)
+        return FeatureVector(
+            "posture",
+            {},
+            version=POSTURE_FEATURE_VERSION,
+            reasons=("face and pose landmarks missing",),
+        )
 
     required = (0, 7, 8, 11, 12)
     invisible = [
@@ -345,8 +378,13 @@ def extract_posture_features(
         < selected.landmark_visibility_min
     ]
     if invisible:
+        if values:
+            return FeatureVector("posture", values, version=POSTURE_FEATURE_VERSION)
         return FeatureVector(
-            "posture", {}, reasons=(f"required pose landmarks not visible: {invisible}",)
+            "posture",
+            {},
+            version=POSTURE_FEATURE_VERSION,
+            reasons=(f"required pose landmarks not visible: {invisible}",),
         )
 
     left_shoulder = pose_landmarks[11]
@@ -355,18 +393,25 @@ def extract_posture_features(
     shoulder_dy = float(right_shoulder.y) - float(left_shoulder.y)
     shoulder_width = math.hypot(shoulder_dx, shoulder_dy)
     if shoulder_width <= 1e-6:
-        return FeatureVector("posture", {}, reasons=("shoulder width is degenerate",))
+        if values:
+            return FeatureVector("posture", values, version=POSTURE_FEATURE_VERSION)
+        return FeatureVector(
+            "posture",
+            {},
+            version=POSTURE_FEATURE_VERSION,
+            reasons=("shoulder width is degenerate",),
+        )
 
     shoulder_mid_x = (float(left_shoulder.x) + float(right_shoulder.x)) / 2.0
     shoulder_mid_y = (float(left_shoulder.y) + float(right_shoulder.y)) / 2.0
     ear_mid_x = (float(pose_landmarks[7].x) + float(pose_landmarks[8].x)) / 2.0
     ear_mid_y = (float(pose_landmarks[7].y) + float(pose_landmarks[8].y)) / 2.0
-    values = {
+    values.update({
         "shoulder_slope": shoulder_dy / max(abs(shoulder_dx), 1e-6),
         "head_offset_x": (ear_mid_x - shoulder_mid_x) / shoulder_width,
         "head_offset_y": (ear_mid_y - shoulder_mid_y) / shoulder_width,
         "shoulder_width": shoulder_width,
-    }
+    })
 
     hip_indices = (23, 24)
     if all(
@@ -386,4 +431,4 @@ def extract_posture_features(
         face_height = max(face_y) - min(face_y)
         values["face_to_shoulder_scale"] = math.sqrt(face_width * face_height) / shoulder_width
 
-    return FeatureVector("posture", values)
+    return FeatureVector("posture", values, version=POSTURE_FEATURE_VERSION)

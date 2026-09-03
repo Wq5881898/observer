@@ -61,12 +61,26 @@ class FeatureStats:
 
 
 POSTURE_GROUPS: Mapping[str, tuple[str, ...]] = {
+    # These two groups remain available when the full face is visible but the
+    # laptop framing crops one or both shoulders. They support only a narrow
+    # head/face posture conclusion, not a claim about the whole upper body.
+    "head_pitch": ("face_head_pitch",),
+    "head_roll": ("face_head_roll",),
     "alignment": ("shoulder_slope", "head_offset_x"),
     "vertical": ("head_offset_y", "torso_lean"),
-    "distance": ("shoulder_width", "face_to_shoulder_scale"),
+    # Use only a scale-normalized face/shoulder ratio here. Absolute face
+    # position, face scale and shoulder width all move together when a person
+    # normally sits nearer to the laptop; counting them as separate groups
+    # turns one distance change into a false multi-group posture violation.
+    "proportion": ("face_to_shoulder_scale",),
 }
 
 POSTURE_SCALE_FLOORS: Mapping[str, float] = {
+    "face_head_pitch": 0.015,
+    "face_head_roll": 0.015,
+    "face_center_x": 0.008,
+    "face_center_y": 0.008,
+    "face_scale": 0.008,
     "shoulder_slope": 0.025,
     "head_offset_x": 0.025,
     "head_offset_y": 0.025,
@@ -75,10 +89,20 @@ POSTURE_SCALE_FLOORS: Mapping[str, float] = {
     "face_to_shoulder_scale": 0.025,
 }
 
+ERGONOMIC_RISK_FEATURES: Mapping[str, tuple[str, str]] = {
+    "shoulder_slope": ("shoulder_imbalance", "absolute"),
+    "torso_lean": ("body_lean", "absolute"),
+    "face_head_roll": ("head_tilt", "absolute"),
+    "face_head_pitch": ("neck_flexion", "positive"),
+}
+
 # Eyelid aperture is useful for rejecting blinks and poorly observed eyes, but it
 # is not a stable gaze-coordinate input.  Keeping it in the regression lets a
 # short blink or fatigue-related squint move the predicted screen position.
 ATTENTION_NON_POSITIONAL_FEATURES = frozenset({"eye_a_open", "eye_b_open"})
+ATTENTION_IRIS_REGRESSION_FEATURES = frozenset(
+    {"iris_a_x", "iris_a_y", "iris_b_x", "iris_b_y"}
+)
 
 # Regression normalization measures how point medians differ inside one session.
 # It can be much tighter than a person's attainable position after sitting down
@@ -97,9 +121,21 @@ ATTENTION_CONTEXT_SCALE_FLOORS: Mapping[str, float] = {
 # Head proxies are normalized by facial geometry. They supplement iris gaze
 # only after a neutral baseline has been captured in the same camera session.
 ATTENTION_HEAD_YAW_DELTA_THRESHOLD = 0.22
+ATTENTION_HEAD_YAW_FUSION_THRESHOLD = 0.30
+# Convert the same-session yaw proxy into approximate screen-width units so
+# horizontal iris regression is interpreted in world/screen coordinates rather
+# than face-local coordinates.  Paired live controls (head turned while eyes
+# remain on centre versus head and eyes moving together) support a factor near
+# 2.0 in both directions without changing the calibrated screen boundary.
+ATTENTION_HEAD_YAW_SCREEN_CORRECTION = 2.0
 ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD = 0.07
 ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD = 0.14
 ATTENTION_GAZE_DOWN_BOUNDARY = 1.0
+# Two repeated natural-camera trials separated a true left-down look
+# (median screen x about -0.36) from a close but in-screen lower-left look
+# (false-positive median about -0.10). Keep the vertical calibration margin
+# unchanged and give only the noisier horizontal iris estimate this guard.
+ATTENTION_HORIZONTAL_GAZE_MARGIN = 0.15
 
 
 def attention_down_evidence_matches(
@@ -174,6 +210,12 @@ class PostureCalibration:
             for score in group_feature_scores.get("alignment", ())
         )
         metrics["posture_groups_observable"] = float(len(group_scores))
+        metrics["posture_head_groups_observable"] = float(
+            sum(name.startswith("head_") for name in group_scores)
+        )
+        metrics["posture_upper_body_groups_observable"] = float(
+            sum(not name.startswith("head_") for name in group_scores)
+        )
         metrics["posture_groups_outside"] = float(outside)
         metrics["posture_alignment_features_outside"] = float(
             alignment_features_outside
@@ -183,9 +225,72 @@ class PostureCalibration:
         # offset and shoulder slope to agree so ordinary one-feature jitter does
         # not weaken the normal two-group false-positive guard.
         corroborated_lateral_lean = alignment_features_outside >= 2
-        if outside >= self.minimum_groups_outside or corroborated_lateral_lean:
-            return SignalValue.violation(confidence=confidence, **metrics)
+        outside_groups = {
+            name for name, score in group_scores.items() if score >= self.z_threshold
+        }
+        evidence: list[str] = []
+        if {"head_pitch", "head_roll"} <= outside_groups:
+            evidence.append("head_orientation")
+        if "head_pitch" in outside_groups and outside_groups & {"vertical", "proportion"}:
+            evidence.append("forward_lean")
+        if "head_roll" in outside_groups and outside_groups & {"alignment", "vertical"}:
+            evidence.append("lateral_head_body_lean")
+        if {"alignment", "vertical"} <= outside_groups:
+            evidence.append("upper_body_lean")
+        if corroborated_lateral_lean:
+            evidence.append("corroborated_lateral_lean")
+        metrics["posture_evidence_count"] = float(len(set(evidence)))
+        if evidence:
+            return SignalValue.violation(
+                confidence=confidence,
+                reason="posture evidence: " + ",".join(sorted(set(evidence))),
+                **metrics,
+            )
         return SignalValue.compliant(confidence=1.0 - min(confidence, 0.49), **metrics)
+
+    def evaluate_ergonomic_risk(self, features: FeatureVector) -> SignalValue:
+        """Evaluate sustained-health candidates independently from productivity."""
+
+        if features.kind != "posture" or features.version != self.feature_version:
+            return SignalValue.unknown(
+                "posture feature version does not match ergonomic calibration"
+            )
+        if not features.observable:
+            return SignalValue.unknown("; ".join(features.reasons))
+
+        metrics: dict[str, float] = {}
+        risks: list[str] = []
+        observable = 0
+        maximum_ratio = 0.0
+        for feature_name, (risk_name, direction) in ERGONOMIC_RISK_FEATURES.items():
+            if feature_name not in features.values or feature_name not in self.stats:
+                continue
+            observable += 1
+            stat = self.stats[feature_name]
+            robust_scale = max(
+                1.4826 * stat.mad,
+                POSTURE_SCALE_FLOORS.get(feature_name, 1e-3),
+            )
+            signed_z = (features.values[feature_name] - stat.median) / robust_scale
+            risk_z = abs(signed_z) if direction == "absolute" else signed_z
+            metrics[f"ergonomic_z_{feature_name}"] = signed_z
+            maximum_ratio = max(maximum_ratio, max(risk_z, 0.0) / self.z_threshold)
+            if risk_z >= self.z_threshold:
+                risks.append(risk_name)
+
+        metrics["ergonomic_features_observable"] = float(observable)
+        metrics["ergonomic_risk_count"] = float(len(risks))
+        if observable == 0:
+            return SignalValue.unknown("no calibrated ergonomic feature is observable")
+        if risks:
+            return SignalValue.violation(
+                confidence=min(1.0, max(0.55, maximum_ratio / 1.5)),
+                reason=",".join(sorted(set(risks))),
+                **metrics,
+            )
+        return SignalValue.compliant(
+            confidence=1.0 - min(0.49, maximum_ratio), **metrics
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +317,7 @@ class AttentionCalibration:
     validation_rmse: float | None
     valid_sample_count: int
     coverage: float
-    allowed_margin: float = 0.08
+    allowed_margin: float = 0.10
     maximum_context_z: float = 5.0
 
     def __post_init__(self) -> None:
@@ -370,8 +475,23 @@ class AttentionCalibration:
         yaw_ratio = abs(yaw_delta) / ATTENTION_HEAD_YAW_DELTA_THRESHOLD
         screen_x = gaze_signal.metrics.get("attention_screen_x")
         screen_y = gaze_signal.metrics.get("attention_screen_y")
-        horizontal_gaze_away = screen_x is not None and (
-            screen_x < -self.allowed_margin or screen_x > 1.0 + self.allowed_margin
+        fused_screen_x = screen_x
+        if (
+            screen_x is not None
+            and abs(yaw_delta) >= ATTENTION_HEAD_YAW_FUSION_THRESHOLD
+        ):
+            fused_screen_x = (
+                screen_x - ATTENTION_HEAD_YAW_SCREEN_CORRECTION * yaw_delta
+            )
+        if fused_screen_x is not None:
+            metrics["attention_fused_screen_x"] = fused_screen_x
+        horizontal_margin = max(
+            self.allowed_margin,
+            ATTENTION_HORIZONTAL_GAZE_MARGIN,
+        )
+        horizontal_gaze_away = fused_screen_x is not None and (
+            fused_screen_x < -horizontal_margin
+            or fused_screen_x > 1.0 + horizontal_margin
         )
         upward_gaze_away = (
             screen_y is not None and screen_y < -self.allowed_margin
@@ -381,9 +501,32 @@ class AttentionCalibration:
             pitch_delta=pitch_delta,
             screen_y=screen_y,
         )
+        horizontal_head_away = yaw_ratio >= 1.0
+        horizontal_gaze_agrees = fused_screen_x is not None and (
+            (yaw_delta > 0 and fused_screen_x < -horizontal_margin)
+            or (yaw_delta < 0 and fused_screen_x > 1.0 + horizontal_margin)
+        )
+        head_gaze_conflict = (
+            horizontal_head_away
+            and horizontal_gaze_away
+            and not horizontal_gaze_agrees
+        ) or (
+            pitch_delta >= ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD
+            and gaze_signal.state is SignalState.COMPLIANT
+            and screen_y is not None
+            and screen_y <= ATTENTION_GAZE_DOWN_BOUNDARY
+        )
+        if head_gaze_conflict:
+            return SignalValue.unknown(
+                "head pose and iris gaze conflict; return to the calibrated posture",
+                **metrics,
+            )
         head_or_directional_gaze_away = (
-            yaw_ratio >= 1.0
-            or horizontal_gaze_away
+            horizontal_gaze_away
+            # Preserve the head-only safety fallback only when iris gaze is
+            # genuinely unavailable.  When iris is observable, a large head
+            # turn must not override eye compensation back to the screen.
+            or (screen_x is None and yaw_ratio >= 1.0)
             or upward_gaze_away
             or down_away
         )
@@ -476,14 +619,17 @@ def fit_posture_calibration(
     versions = {sample.version for sample in valid}
     if len(versions) != 1:
         raise ValueError("posture calibration samples use mixed feature versions")
-    common_names = set(valid[0].values)
-    for sample in valid[1:]:
-        common_names.intersection_update(sample.values)
-    if not common_names:
-        raise ValueError("posture calibration has no common features")
+    available_names = set().union(*(sample.values for sample in valid))
+    if not available_names:
+        raise ValueError("posture calibration has no observable features")
     stats: dict[str, FeatureStats] = {}
-    for name in sorted(common_names):
-        values = np.asarray([sample.values[name] for sample in valid], dtype=float)
+    for name in sorted(available_names):
+        feature_values = [sample.values[name] for sample in valid if name in sample.values]
+        # A temporarily cropped shoulder must not erase upper-body calibration,
+        # but a feature seen only incidentally is not a reliable personal base.
+        if len(feature_values) < minimum_valid_samples:
+            continue
+        values = np.asarray(feature_values, dtype=float)
         median = float(np.median(values))
         stats[name] = FeatureStats(
             median=median,
@@ -521,9 +667,7 @@ def fit_attention_calibration(
     common_feature_names = set.intersection(
         *(set(item.features.values) for item in valid)
     )
-    feature_names = tuple(
-        sorted(common_feature_names - ATTENTION_NON_POSITIONAL_FEATURES)
-    )
+    feature_names = tuple(sorted(common_feature_names - ATTENTION_NON_POSITIONAL_FEATURES))
     if not feature_names:
         raise ValueError("attention calibration has no common features")
     matrix = np.asarray(
@@ -534,12 +678,30 @@ def fit_attention_calibration(
     means = matrix.mean(axis=0)
     scales = matrix.std(axis=0)
     scales[scales < 1e-6] = 1.0
-    design = np.column_stack((np.ones(len(matrix)), (matrix - means) / scales))
+    normalized = (matrix - means) / scales
+    regression_names = tuple(
+        name for name in feature_names if name in ATTENTION_IRIS_REGRESSION_FEATURES
+    )
+    # Synthetic/unit-test feature sets may use generic names. Production Face
+    # Mesh samples always expose the four iris names above; only in the generic
+    # fallback do all supplied features participate.
+    if not regression_names:
+        regression_names = feature_names
+    regression_indices = tuple(feature_names.index(name) for name in regression_names)
+    design = np.column_stack(
+        (np.ones(len(matrix)), normalized[:, regression_indices])
+    )
     penalty = np.eye(design.shape[1]) * ridge
     penalty[0, 0] = 0.0
-    coefficients = np.linalg.solve(design.T @ design + penalty, design.T @ target)
-    train_prediction = design @ coefficients
+    fitted_coefficients = np.linalg.solve(
+        design.T @ design + penalty, design.T @ target
+    )
+    train_prediction = design @ fitted_coefficients
     training_rmse = float(np.sqrt(np.mean((train_prediction - target) ** 2)))
+    coefficients = np.zeros((len(feature_names) + 1, 2), dtype=float)
+    coefficients[0, :] = fitted_coefficients[0, :]
+    for fitted_index, feature_index in enumerate(regression_indices, start=1):
+        coefficients[feature_index + 1, :] = fitted_coefficients[fitted_index, :]
     model = AttentionCalibration(
         feature_version=versions.pop(),
         feature_names=feature_names,

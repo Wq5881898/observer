@@ -6,6 +6,7 @@ from observer.observations import (
     NormalizedPoint,
     Observation,
     PhoneCandidate,
+    SignalState,
     SignalValue,
     phone_held_signal,
 )
@@ -41,6 +42,10 @@ class ObservationFusion:
         self._attention = SignalValue.unknown("attention calibration not available")
         self._posture_at: float | None = None
         self._posture = SignalValue.unknown("posture calibration not available")
+        self._ergonomic_posture_at: float | None = None
+        self._ergonomic_posture = SignalValue.unknown(
+            "ergonomic posture calibration not available"
+        )
 
     def update_quality(self, at_monotonic: float, observable: bool, reason: str | None) -> None:
         self._quality_at = at_monotonic
@@ -81,6 +86,12 @@ class ObservationFusion:
         self._posture_at = at_monotonic
         self._posture = signal
 
+    def update_ergonomic_posture(
+        self, at_monotonic: float, signal: SignalValue
+    ) -> None:
+        self._ergonomic_posture_at = at_monotonic
+        self._ergonomic_posture = signal
+
     def build(self, now_monotonic: float) -> Observation:
         quality_fresh = self._is_fresh(
             self._quality_at, now_monotonic, self.freshness.quality_seconds
@@ -95,6 +106,11 @@ class ObservationFusion:
         )
         posture_fresh = self._is_fresh(
             self._posture_at, now_monotonic, self.freshness.posture_seconds
+        )
+        ergonomic_posture_fresh = self._is_fresh(
+            self._ergonomic_posture_at,
+            now_monotonic,
+            self.freshness.posture_seconds,
         )
 
         if quality_fresh and not self._quality_observable:
@@ -144,6 +160,41 @@ class ObservationFusion:
                 else SignalValue.unknown("posture result is stale or calibration unavailable")
             )
 
+        if quality_fresh and not self._quality_observable:
+            ergonomic_risk = SignalValue.unknown(self._quality_reason)
+        else:
+            risk_reasons: list[str] = []
+            risk_metrics: dict[str, float] = {}
+            risk_confidences: list[float] = []
+            if attention_fresh and self._attention.reason and "conflict" in self._attention.reason:
+                risk_reasons.append("eye_head_compensation")
+                risk_metrics.update(self._attention.metrics)
+            if ergonomic_posture_fresh:
+                risk_metrics.update(self._ergonomic_posture.metrics)
+                if self._ergonomic_posture.state is SignalState.VIOLATION:
+                    if self._ergonomic_posture.reason:
+                        risk_reasons.extend(self._ergonomic_posture.reason.split(","))
+                    if self._ergonomic_posture.confidence is not None:
+                        risk_confidences.append(self._ergonomic_posture.confidence)
+            if risk_reasons:
+                ergonomic_risk = SignalValue.violation(
+                    confidence=max(risk_confidences, default=0.7),
+                    reason=",".join(sorted(set(risk_reasons))),
+                    **risk_metrics,
+                )
+            elif (
+                ergonomic_posture_fresh
+                and self._ergonomic_posture.state is SignalState.COMPLIANT
+            ):
+                ergonomic_risk = SignalValue.compliant(
+                    self._ergonomic_posture.confidence, **risk_metrics
+                )
+            else:
+                ergonomic_risk = SignalValue.unknown(
+                    "ergonomic risk features are not currently observable",
+                    **risk_metrics,
+                )
+
         return Observation(
             monotonic_seconds=now_monotonic,
             signals={
@@ -151,6 +202,7 @@ class ObservationFusion:
                 "phone_held": phone_held,
                 "attention_away": attention,
                 "posture_deviation": posture,
+                "ergonomic_risk": ergonomic_risk,
             },
         )
 

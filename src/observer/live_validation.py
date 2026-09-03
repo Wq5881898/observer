@@ -14,6 +14,8 @@ import numpy as np
 
 from observer.alignment import guide_alignment
 from observer.calibration import (
+    ATTENTION_GAZE_DOWN_BOUNDARY,
+    ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD,
     ATTENTION_HEAD_YAW_DELTA_THRESHOLD,
     attention_down_evidence_matches,
     load_profile,
@@ -46,6 +48,7 @@ class Scenario:
     repetitions: int = 5
     target: tuple[float, float] | None = None
     accepted_states: tuple[SignalState, ...] = ()
+    distance_mode: str | None = None
 
 
 SCENARIOS: tuple[Scenario, ...] = (
@@ -61,6 +64,7 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("posture_forward_slouch", "posture_deviation", SignalState.VIOLATION, "Lean or slouch clearly forward and hold", duration_seconds=6.0, repetitions=1),
     Scenario("posture_side_lean", "posture_deviation", SignalState.VIOLATION, "Lean clearly to either side and hold", duration_seconds=6.0, repetitions=1),
     Scenario("attention_center", "attention_away", SignalState.COMPLIANT, "Look at the dot", target=(0.50, 0.50)),
+    Scenario("attention_bottom_center", "attention_away", SignalState.COMPLIANT, "Look at the lower screen dot without lowering your head toward the desk", target=(0.50, 0.92), duration_seconds=6.0, repetitions=1),
     Scenario("attention_top_left", "attention_away", SignalState.COMPLIANT, "Look at the dot", target=(0.08, 0.08), repetitions=3),
     Scenario("attention_top_right", "attention_away", SignalState.COMPLIANT, "Look at the dot", target=(0.92, 0.08), repetitions=3),
     Scenario("attention_bottom_left", "attention_away", SignalState.COMPLIANT, "Look at the dot", target=(0.08, 0.92), repetitions=3),
@@ -69,8 +73,51 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("attention_outside_right", "attention_away", SignalState.VIOLATION, "Look beyond the right screen edge"),
     Scenario("attention_desk", "attention_away", SignalState.VIOLATION, "Look down at the desk"),
     Scenario("attention_desk_control_side", "attention_away", SignalState.COMPLIANT, "Turn clearly to either side but keep your gaze level", duration_seconds=6.0, repetitions=1),
+    Scenario("attention_desk_control_left", "attention_away", SignalState.COMPLIANT, "Turn clearly left and keep your gaze level; this must not count as looking down", duration_seconds=6.0, repetitions=1),
+    Scenario("attention_desk_control_right", "attention_away", SignalState.COMPLIANT, "Turn clearly right and keep your gaze level; this must not count as looking down", duration_seconds=6.0, repetitions=1),
     Scenario("attention_desk_control_chin", "attention_away", SignalState.COMPLIANT, "Lower your chin slightly but keep looking at the screen", duration_seconds=6.0, repetitions=1),
     Scenario("attention_eyes_covered", "attention_away", SignalState.UNKNOWN, "Cover or close both eyes", repetitions=3),
+    Scenario("attention_boundary_a01_center", "attention_away", SignalState.COMPLIANT, "A01: natural distance; look at screen center", target=(0.50, 0.50), duration_seconds=10.0, repetitions=1),
+    Scenario("attention_boundary_a02_outside_left", "attention_away", SignalState.VIOLATION, "A02: natural distance; look at the fixed outside LEFT-LOW point", duration_seconds=12.0, repetitions=1),
+    Scenario("attention_boundary_a03_recovery", "attention_away", SignalState.COMPLIANT, "A03: return to natural distance and screen center", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
+    Scenario("attention_boundary_a04_outside_right", "attention_away", SignalState.VIOLATION, "A04: natural distance; look at the fixed outside RIGHT-LOW point", duration_seconds=12.0, repetitions=1),
+    Scenario("attention_boundary_a05_recovery", "attention_away", SignalState.COMPLIANT, "A05: return to natural distance and screen center", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
+    Scenario("attention_boundary_a06_near_left", "attention_away", SignalState.COMPLIANT, "A06: move close; look at the fixed INSIDE left-low point", target=(0.08, 0.92), duration_seconds=12.0, repetitions=1, distance_mode="near"),
+    Scenario("attention_boundary_a07_near_right", "attention_away", SignalState.COMPLIANT, "A07: stay close; look at the fixed INSIDE right-low point", target=(0.92, 0.92), duration_seconds=12.0, repetitions=1, distance_mode="near"),
+    Scenario("attention_boundary_a08_far_center", "attention_away", SignalState.COMPLIANT, "A08: calibration distance; look at screen center", target=(0.50, 0.50), duration_seconds=10.0, repetitions=1, distance_mode="calibration"),
+    Scenario("attention_boundary_a09_far_left", "attention_away", SignalState.COMPLIANT, "A09: stay at calibration distance; look INSIDE left-low", target=(0.08, 0.92), duration_seconds=12.0, repetitions=1, distance_mode="calibration"),
+    Scenario("attention_boundary_a10_far_right", "attention_away", SignalState.COMPLIANT, "A10: stay at calibration distance; look INSIDE right-low", target=(0.92, 0.92), duration_seconds=12.0, repetitions=1, distance_mode="calibration"),
+    Scenario("attention_boundary_a11_final", "attention_away", SignalState.COMPLIANT, "A11: natural distance; final screen center", target=(0.50, 0.50), duration_seconds=10.0, repetitions=1),
+    Scenario("attention_compensation_d01_center", "attention_away", SignalState.COMPLIANT, "D01: natural distance; face forward and look at center dot", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
+    Scenario("attention_compensation_d02_head_left_eyes_center", "attention_away", SignalState.COMPLIANT, "D02: turn head left moderately; keep EYES on center dot", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
+    Scenario("attention_compensation_d03_outside_left", "attention_away", SignalState.VIOLATION, "D03: turn HEAD + EYES left together; keep gaze BEYOND left edge; do NOT look back at center", duration_seconds=10.0, repetitions=1),
+    Scenario("attention_compensation_d04_recovery", "attention_away", SignalState.COMPLIANT, "D04: face forward and look at center dot", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
+    Scenario("attention_compensation_d05_head_right_eyes_center", "attention_away", SignalState.COMPLIANT, "D05: turn head right moderately; keep EYES on center dot", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
+    Scenario("attention_compensation_d06_outside_right", "attention_away", SignalState.VIOLATION, "D06: turn HEAD + EYES right together; keep gaze BEYOND right edge; do NOT look back at center", duration_seconds=10.0, repetitions=1),
+    Scenario("attention_compensation_d07_recovery", "attention_away", SignalState.COMPLIANT, "D07: face forward and look at center dot", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
+    Scenario("attention_compensation_d08_near_center", "attention_away", SignalState.COMPLIANT, "D08: move close; look at center dot", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1, distance_mode="near"),
+    Scenario("attention_compensation_d09_near_left", "attention_away", SignalState.COMPLIANT, "D09: stay close; look at INSIDE left-low dot", target=(0.08, 0.92), duration_seconds=8.0, repetitions=1, distance_mode="near"),
+    Scenario("attention_compensation_d10_near_right", "attention_away", SignalState.COMPLIANT, "D10: stay close; look at INSIDE right-low dot", target=(0.92, 0.92), duration_seconds=8.0, repetitions=1, distance_mode="near"),
+    Scenario("attention_compensation_d11_final", "attention_away", SignalState.COMPLIANT, "D11: return to natural distance and center dot", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
+    Scenario("phone_baseline_b01_natural_no_phone", "phone_held", SignalState.COMPLIANT, "B01: work naturally; no phone in your hands", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b02_desktop_phone", "phone_held", SignalState.COMPLIANT, "B02: phone visible on desk; hands do not hold it", duration_seconds=12.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b03_non_phone_object", "phone_held", SignalState.COMPLIANT, "B03: hold a remote or calculator; it is not a phone", duration_seconds=12.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b04_one_hand_phone", "phone_held", SignalState.VIOLATION, "B04: hold and use the phone naturally with ONE hand", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_baseline_b05_recovery", "phone_held", SignalState.COMPLIANT, "B05: put the phone down; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b06_two_hands_low", "phone_held", SignalState.VIOLATION, "B06: use phone with BOTH hands; low position is allowed", duration_seconds=12.0, repetitions=1, accepted_states=(SignalState.VIOLATION, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b07_recovery", "phone_held", SignalState.COMPLIANT, "B07: put the phone down; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b08_phone_out_of_frame", "phone_held", SignalState.UNKNOWN, "B08 PHONE: hold phone outside camera frame; keep looking at it", duration_seconds=12.0, repetitions=1),
+    Scenario("attention_baseline_b08_look_off_screen", "attention_away", SignalState.VIOLATION, "B08 ATTENTION: repeat hold; keep eyes on the phone off screen", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_baseline_b09_final", "phone_held", SignalState.COMPLIANT, "B09: final natural work; no phone in your hands", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("posture_ergonomics_c01_natural", "posture_deviation", SignalState.COMPLIANT, "C01: sit in your natural comfortable posture", duration_seconds=15.0, repetitions=1),
+    Scenario("posture_ergonomics_c02_near_natural", "posture_deviation", SignalState.COMPLIANT, "C02: move closer naturally; do NOT deliberately slouch", duration_seconds=15.0, repetitions=1),
+    Scenario("posture_ergonomics_c03_forward_slouch", "posture_deviation", SignalState.VIOLATION, "C03: lean/slouch clearly forward; stay safe and comfortable", duration_seconds=12.0, repetitions=1),
+    Scenario("posture_ergonomics_c04_recovery", "posture_deviation", SignalState.COMPLIANT, "C04: return to your natural comfortable posture", duration_seconds=8.0, repetitions=1),
+    Scenario("posture_ergonomics_c05_side_or_tilt", "posture_deviation", SignalState.VIOLATION, "C05: lean or tilt clearly to one side; stay safe", duration_seconds=12.0, repetitions=1),
+    Scenario("posture_ergonomics_c06_shoulder_unknown", "posture_deviation", SignalState.UNKNOWN, "C06 POSTURE: keep one shoulder partly outside frame", duration_seconds=12.0, repetitions=1),
+    Scenario("attention_ergonomics_c06_attention", "attention_away", SignalState.COMPLIANT, "C06 ATTENTION: repeat hold; keep eyes on screen center", target=(0.50, 0.50), duration_seconds=12.0, repetitions=1),
+    Scenario("attention_ergonomics_c07_small_chin", "attention_away", SignalState.COMPLIANT, "C07: lower chin slightly; keep eyes on screen center", target=(0.50, 0.50), duration_seconds=12.0, repetitions=1),
+    Scenario("posture_ergonomics_c08_final", "posture_deviation", SignalState.COMPLIANT, "C08: return to your natural comfortable posture", duration_seconds=10.0, repetitions=1),
 )
 
 
@@ -113,6 +160,7 @@ class ValidationCancelled(RuntimeError):
 TRIAL_PREPARE_SECONDS = 1.0
 TARGET_READY_SECONDS = 0.6
 ATTENTION_DIRECTION_SCREEN_MARGIN = 0.08
+ATTENTION_CHIN_CONTROL_MIN_DELTA = 0.03
 
 
 def scenario_catalog() -> list[dict[str, Any]]:
@@ -130,13 +178,247 @@ def scenario_accepted_states(scenario: Scenario) -> tuple[SignalState, ...]:
     return scenario.accepted_states or (scenario.truth_state,)
 
 
+def scenario_acceptance_summary(scenario: Scenario) -> str:
+    """Return the short, user-visible baseline criterion for one scenario."""
+    if scenario.scenario_id.startswith("phone_baseline_b0"):
+        if scenario.scenario_id in {
+            "phone_baseline_b01_natural_no_phone",
+            "phone_baseline_b02_desktop_phone",
+            "phone_baseline_b03_non_phone_object",
+            "phone_baseline_b09_final",
+        }:
+            return "STANDARD: no hand-held violation; error run <2s"
+        if scenario.scenario_id in {
+            "phone_baseline_b05_recovery",
+            "phone_baseline_b07_recovery",
+        }:
+            return "STANDARD: violation <=10%; violation run <2.5s"
+        if scenario.scenario_id == "phone_baseline_b04_one_hand_phone":
+            return "STANDARD: violation >=90%; continuous >=10s"
+        if scenario.scenario_id == "phone_baseline_b06_two_hands_low":
+            return "STANDARD: observable => violation >=90%; else unknown"
+        if scenario.scenario_id == "phone_baseline_b08_phone_out_of_frame":
+            return "STANDARD: unknown >=90%"
+    if scenario.scenario_id.startswith("posture_ergonomics_c"):
+        if scenario.scenario_id in {
+            "posture_ergonomics_c03_forward_slouch",
+            "posture_ergonomics_c05_side_or_tilt",
+        }:
+            return "STANDARD: violation >=90%"
+        if scenario.scenario_id == "posture_ergonomics_c06_shoulder_unknown":
+            return "STANDARD: unknown >=90%; no false posture violation"
+        if scenario.scenario_id == "posture_ergonomics_c04_recovery":
+            return "STANDARD: compliant >=90%; unknown <=10%; no 2.5s error"
+        return "STANDARD: compliant >=90%; unknown <=10%; no 2s error"
+    if scenario.scenario_id == "attention_baseline_b08_look_off_screen":
+        return "STANDARD: violation >=90%; continuous >=8s"
+    if scenario.scenario_id.startswith("attention_ergonomics_c"):
+        return "STANDARD: violation <=10%; unknown <=10%; no 8s event"
+    if scenario.scenario_id in {
+        "attention_boundary_a02_outside_left",
+        "attention_boundary_a04_outside_right",
+        "attention_compensation_d03_outside_left",
+        "attention_compensation_d06_outside_right",
+    }:
+        return "STANDARD: violation >=90%; continuous >=8s"
+    if scenario.scenario_id in {
+        "attention_boundary_a03_recovery",
+        "attention_boundary_a05_recovery",
+        "attention_compensation_d04_recovery",
+        "attention_compensation_d07_recovery",
+    }:
+        return "STANDARD: compliant >=90%; recover <=2.5s"
+    if scenario.scenario_id.startswith(("attention_boundary_", "attention_compensation_")):
+        return "STANDARD: violation <=10%; unknown <=10%; no 8s event"
+    return ""
+
+
+def scenario_record_passes(scenario: Scenario, record: TrialRecord) -> bool:
+    """Apply the same strict baseline standard shown in the interactive UI."""
+
+    if not record.valid:
+        return False
+    metrics = record.metrics
+    if scenario.scenario_id.startswith("phone_baseline_b0"):
+        violation_fraction = metrics.get("violation_fraction", 1.0)
+        unknown_fraction = metrics.get("unknown_fraction", 1.0)
+        violation_run = metrics.get("longest_violation_run_seconds", 999.0)
+        if scenario.scenario_id == "phone_baseline_b04_one_hand_phone":
+            return violation_fraction >= 0.90 and violation_run >= 10.0
+        if scenario.scenario_id == "phone_baseline_b06_two_hands_low":
+            if unknown_fraction <= 0.10:
+                return violation_fraction >= 0.90
+            return unknown_fraction >= 0.90
+        if scenario.scenario_id == "phone_baseline_b08_phone_out_of_frame":
+            return unknown_fraction >= 0.90
+        if scenario.scenario_id in {
+            "phone_baseline_b05_recovery",
+            "phone_baseline_b07_recovery",
+        }:
+            return violation_fraction <= 0.10 and violation_run < 2.5
+        return violation_fraction <= 0.10 and violation_run < 2.0
+    if scenario.scenario_id.startswith("posture_ergonomics_c"):
+        compliant_fraction = metrics.get("compliant_fraction", 0.0)
+        violation_fraction = metrics.get("violation_fraction", 1.0)
+        unknown_fraction = metrics.get("unknown_fraction", 1.0)
+        violation_run = metrics.get("longest_violation_run_seconds", 999.0)
+        if scenario.scenario_id in {
+            "posture_ergonomics_c03_forward_slouch",
+            "posture_ergonomics_c05_side_or_tilt",
+        }:
+            return violation_fraction >= 0.90
+        if scenario.scenario_id == "posture_ergonomics_c06_shoulder_unknown":
+            return unknown_fraction >= 0.90 and violation_fraction <= 0.10
+        maximum_error_run = 2.5 if scenario.scenario_id.endswith("recovery") else 2.0
+        return (
+            compliant_fraction >= 0.90
+            and unknown_fraction <= 0.10
+            and violation_run < maximum_error_run
+        )
+    if scenario.scenario_id == "attention_baseline_b08_look_off_screen":
+        return (
+            metrics.get("violation_fraction", 0.0) >= 0.90
+            and metrics.get("longest_violation_run_seconds", 0.0) >= 8.0
+        )
+    if scenario.scenario_id.startswith("attention_ergonomics_c"):
+        return (
+            metrics.get("violation_fraction", 1.0) <= 0.10
+            and metrics.get("unknown_fraction", 1.0) <= 0.10
+            and metrics.get("longest_violation_run_seconds", 8.0) < 8.0
+        )
+    if scenario.scenario_id in {
+        "attention_boundary_a02_outside_left",
+        "attention_boundary_a04_outside_right",
+        "attention_compensation_d03_outside_left",
+        "attention_compensation_d06_outside_right",
+    }:
+        return (
+            metrics.get("violation_fraction", 0.0) >= 0.90
+            and metrics.get("longest_violation_run_seconds", 0.0) >= 8.0
+        )
+    if scenario.scenario_id in {
+        "attention_boundary_a03_recovery",
+        "attention_boundary_a05_recovery",
+        "attention_compensation_d04_recovery",
+        "attention_compensation_d07_recovery",
+    }:
+        return (
+            metrics.get("compliant_fraction", 0.0) >= 0.90
+            and metrics.get("unknown_fraction", 1.0) <= 0.10
+        )
+    if scenario.scenario_id.startswith(
+        ("attention_boundary_", "attention_compensation_")
+    ):
+        return (
+            metrics.get("violation_fraction", 1.0) <= 0.10
+            and metrics.get("unknown_fraction", 1.0) <= 0.10
+            and metrics.get("longest_violation_run_seconds", 8.0) < 8.0
+        )
+    return record.predicted_state in {
+        state.value for state in scenario_accepted_states(scenario)
+    }
+
+
 _DIRECTIONAL_ATTENTION_SCENARIOS = {
     "attention_outside_left",
     "attention_outside_right",
     "attention_desk",
     "attention_desk_control_side",
+    "attention_desk_control_left",
+    "attention_desk_control_right",
+    "attention_desk_control_chin",
+    "attention_boundary_a02_outside_left",
+    "attention_boundary_a04_outside_right",
+    "attention_compensation_d03_outside_left",
+    "attention_compensation_d06_outside_right",
+}
+
+_ATTENTION_ACTION_GATED_SCENARIOS = {
+    "attention_desk_control_side",
+    "attention_desk_control_left",
+    "attention_desk_control_right",
     "attention_desk_control_chin",
 }
+
+# Retained only so historical tuning batches remain replayable. These prompts
+# proved ambiguous or redundant and must not enter the default protocol or any
+# holdout acceptance batch.
+_TUNING_DIAGNOSTIC_ONLY_SCENARIOS = {
+    "attention_desk_control_side",
+    "attention_desk_control_chin",
+    "attention_boundary_a01_center",
+    "attention_boundary_a02_outside_left",
+    "attention_boundary_a03_recovery",
+    "attention_boundary_a04_outside_right",
+    "attention_boundary_a05_recovery",
+    "attention_boundary_a06_near_left",
+    "attention_boundary_a07_near_right",
+    "attention_boundary_a08_far_center",
+    "attention_boundary_a09_far_left",
+    "attention_boundary_a10_far_right",
+    "attention_boundary_a11_final",
+    "attention_compensation_d01_center",
+    "attention_compensation_d02_head_left_eyes_center",
+    "attention_compensation_d03_outside_left",
+    "attention_compensation_d04_recovery",
+    "attention_compensation_d05_head_right_eyes_center",
+    "attention_compensation_d06_outside_right",
+    "attention_compensation_d07_recovery",
+    "attention_compensation_d08_near_center",
+    "attention_compensation_d09_near_left",
+    "attention_compensation_d10_near_right",
+    "attention_compensation_d11_final",
+}
+
+
+def attention_control_action_matches(
+    scenario: Scenario, signal: SignalValue
+) -> bool:
+    """Confirm that a negative-control action was actually performed."""
+
+    return attention_control_action_blocker(scenario, signal) is None
+
+
+def attention_control_action_blocker(
+    scenario: Scenario, signal: SignalValue
+) -> str | None:
+    """Return a user-facing reason when a control action has not formed."""
+
+    metrics = signal.metrics
+    yaw = metrics.get("attention_head_yaw_delta")
+    pitch = metrics.get("attention_head_pitch_delta")
+    screen_y = metrics.get("attention_screen_y")
+    if scenario.scenario_id == "attention_desk_control_left":
+        if yaw is None:
+            return "yaw unavailable"
+        if yaw < ATTENTION_HEAD_YAW_DELTA_THRESHOLD:
+            return f"turn farther left (yaw={yaw:+.2f})"
+        return None
+    if scenario.scenario_id == "attention_desk_control_right":
+        if yaw is None:
+            return "yaw unavailable"
+        if yaw > -ATTENTION_HEAD_YAW_DELTA_THRESHOLD:
+            return f"turn farther right (yaw={yaw:+.2f})"
+        return None
+    if scenario.scenario_id == "attention_desk_control_side":
+        if yaw is None:
+            return "yaw unavailable"
+        if abs(yaw) < ATTENTION_HEAD_YAW_DELTA_THRESHOLD:
+            return f"turn farther to one side (yaw={yaw:+.2f})"
+        return None
+    if scenario.scenario_id == "attention_desk_control_chin":
+        if yaw is None or pitch is None or screen_y is None:
+            return "direction evidence unavailable"
+        if abs(yaw) >= ATTENTION_HEAD_YAW_DELTA_THRESHOLD:
+            return f"face the screen more directly (yaw={yaw:+.2f})"
+        if pitch < ATTENTION_CHIN_CONTROL_MIN_DELTA:
+            return f"chin change too small (pitch={pitch:+.2f})"
+        if pitch >= ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD:
+            return f"chin is in strong-down range (pitch={pitch:+.2f})"
+        if screen_y > ATTENTION_GAZE_DOWN_BOUNDARY:
+            return f"gaze predicts below screen (y={screen_y:+.2f})"
+        return None
+    return None
 
 
 def attention_direction_matches(scenario: Scenario, signal: SignalValue) -> bool:
@@ -147,12 +429,12 @@ def attention_direction_matches(scenario: Scenario, signal: SignalValue) -> bool
     pitch = metrics.get("attention_head_pitch_delta")
     screen_x = metrics.get("attention_screen_x")
     screen_y = metrics.get("attention_screen_y")
-    if scenario.scenario_id == "attention_outside_left":
+    if scenario.scenario_id.endswith("outside_left"):
         return (yaw is not None and yaw >= ATTENTION_HEAD_YAW_DELTA_THRESHOLD) or (
             screen_x is not None
             and screen_x < -ATTENTION_DIRECTION_SCREEN_MARGIN
         )
-    if scenario.scenario_id == "attention_outside_right":
+    if scenario.scenario_id.endswith("outside_right"):
         return (yaw is not None and yaw <= -ATTENTION_HEAD_YAW_DELTA_THRESHOLD) or (
             screen_x is not None
             and screen_x > 1.0 + ATTENTION_DIRECTION_SCREEN_MARGIN
@@ -179,7 +461,23 @@ def scenario_validation_signal(scenario: Scenario, signal: SignalValue) -> Signa
         return signal
     if attention_direction_matches(scenario, signal):
         return SignalValue.violation(signal.confidence, **signal.metrics)
+    if (
+        scenario.scenario_id in _ATTENTION_ACTION_GATED_SCENARIOS
+        and not attention_control_action_matches(scenario, signal)
+    ):
+        return SignalValue.unknown(
+            "requested control action has not formed", **signal.metrics
+        )
     return SignalValue.compliant(signal.confidence, **signal.metrics)
+
+
+def attention_action_status(scenario: Scenario, signal: SignalValue) -> str:
+    if scenario.scenario_id == "attention_bottom_center":
+        return "ACTION: USER CONFIRM - look at the lower dot before pressing SPACE/ENTER"
+    if scenario.scenario_id not in _ATTENTION_ACTION_GATED_SCENARIOS:
+        return ""
+    blocker = attention_control_action_blocker(scenario, signal)
+    return "ACTION: MATCHED" if blocker is None else f"ACTION: NOT FORMED - {blocker}"
 
 
 def attention_direction_status(signal: SignalValue) -> str:
@@ -196,6 +494,71 @@ def attention_direction_status(signal: SignalValue) -> str:
     return "  ".join(values) or "direction evidence unavailable"
 
 
+def scenario_distance_status(
+    scenario: Scenario,
+    probe: MediapipeVisionProbe,
+    calibration_face_scale: float | None,
+    session_face_scale: float | None = None,
+) -> tuple[bool, str]:
+    if scenario.distance_mode is None:
+        return True, ""
+    feature = probe.latest_smoothed_attention_features
+    current = (
+        feature.values.get("face_scale")
+        if feature is not None and not feature.reasons
+        else None
+    )
+    if current is None or calibration_face_scale is None:
+        return False, "DISTANCE: waiting for observable face scale"
+    if scenario.distance_mode == "near":
+        reference = (
+            session_face_scale
+            if session_face_scale is not None
+            else calibration_face_scale
+        )
+        minimum = reference + (0.08 if session_face_scale is not None else 0.10)
+        return (
+            current >= minimum,
+            f"DISTANCE: face={current:.3f}  need >= {minimum:.3f} (closer)",
+        )
+    if scenario.distance_mode == "calibration":
+        tolerance = 0.03
+        lower = calibration_face_scale - tolerance
+        upper = calibration_face_scale + tolerance
+        return (
+            lower <= current <= upper,
+            f"DISTANCE: face={current:.3f}  target {lower:.3f}-{upper:.3f}",
+        )
+    raise ValueError(f"unknown scenario distance mode: {scenario.distance_mode}")
+
+
+def scenario_capture_status(
+    scenario: Scenario,
+    probe: MediapipeVisionProbe,
+    *,
+    distance_matches: bool,
+    distance_status: str,
+) -> tuple[bool, str]:
+    """Check capture quality without using the model-under-test as ground truth."""
+    if not distance_matches:
+        return False, distance_status or "CAPTURE: distance not ready"
+    quality = probe.latest_quality
+    if quality is None or not quality.observable:
+        reason = "; ".join(quality.reasons) if quality is not None else "waiting for image"
+        return False, f"CAPTURE: {reason}"
+    if scenario.signal_name == "attention_away":
+        feature = probe.latest_smoothed_attention_features
+        if feature is None or not feature.observable:
+            reason = "; ".join(feature.reasons) if feature is not None else "waiting for face and eyes"
+            return False, f"CAPTURE: {reason}"
+    elif scenario.signal_name == "posture_deviation":
+        feature = probe.latest_posture_features
+        if feature is None or not feature.observable:
+            reason = "; ".join(feature.reasons) if feature is not None else "waiting for posture features"
+            return False, f"CAPTURE: {reason}"
+    return True, "CAPTURE: image/face/eyes/distance ready"
+
+
 def run_live_validation(
     config: AppConfig,
     models: ModelFiles,
@@ -207,6 +570,7 @@ def run_live_validation(
     output_root: str | Path = "data/validation",
     repetitions_override: int | None = None,
     save_error_evidence: bool = True,
+    save_trial_videos: bool = False,
 ) -> Path:
     import cv2
 
@@ -215,11 +579,21 @@ def run_live_validation(
     unknown_scenarios = requested_scenarios - known_scenarios
     if unknown_scenarios:
         raise ValueError(f"unknown validation scenarios: {sorted(unknown_scenarios)}")
+    requested_diagnostics = requested_scenarios & _TUNING_DIAGNOSTIC_ONLY_SCENARIOS
+    if dataset_role == "holdout" and requested_diagnostics:
+        raise ValueError(
+            "retired tuning diagnostics cannot be used for holdout: "
+            f"{sorted(requested_diagnostics)}"
+        )
     selected = [
         scenario
         for scenario in SCENARIOS
         if scenario.signal_name in signal_names
         and (not requested_scenarios or scenario.scenario_id in requested_scenarios)
+        and (
+            bool(requested_scenarios)
+            or scenario.scenario_id not in _TUNING_DIAGNOSTIC_ONLY_SCENARIOS
+        )
     ]
     unknown_signals = set(signal_names) - {scenario.signal_name for scenario in SCENARIOS}
     if unknown_signals:
@@ -241,6 +615,9 @@ def run_live_validation(
         environment = current_environment(config, first.frame.shape)
         profile = load_profile(profile_path, environment)
         probe = MediapipeVisionProbe(models, config.inference, profile)
+        calibration_face_scale = profile.attention.context_statistics().get(
+            "face_scale", (None, None)
+        )[0]
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         if set(signal_names) == {"phone_held"}:
@@ -250,15 +627,16 @@ def run_live_validation(
                 "frames_saved": 0,
             }
         else:
-            alignment_summary = asdict(
-                guide_alignment(
-                    camera,
-                    probe,
-                    profile,
-                    window,
-                    require_posture="posture_deviation" in signal_names,
-                )
+            alignment_result = guide_alignment(
+                camera,
+                probe,
+                profile,
+                window,
+                require_posture="posture_deviation" in signal_names,
+                require_face_scale=False,
             )
+            alignment_summary = asdict(alignment_result)
+        session_face_scale = alignment_summary.get("session_face_scale")
         batch_id = f"{dataset_role}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
         batch_directory = Path(output_root) / batch_id
         config_hash = _config_hash(config)
@@ -280,8 +658,22 @@ def run_live_validation(
         for scenario in selected:
             repetitions = repetitions_override or scenario.repetitions
             for repetition in range(1, repetitions + 1):
-                _await_ready(camera, probe, window, scenario, repetition, repetitions)
+                _await_ready(
+                    camera,
+                    probe,
+                    window,
+                    scenario,
+                    repetition,
+                    repetitions,
+                    calibration_face_scale,
+                    session_face_scale,
+                )
                 trial_id = str(uuid4())
+                trial_video_path = (
+                    batch_directory / "trial-videos" / f"{scenario.scenario_id}-{trial_id}.mp4"
+                    if save_trial_videos
+                    else None
+                )
                 record, error_frame, derived_records, interrupted = _run_trial(
                     camera,
                     probe,
@@ -291,9 +683,24 @@ def run_live_validation(
                     trial_id,
                     sampler,
                     resource_samples,
+                    trial_video_path=trial_video_path,
+                    nominal_fps=config.camera.capture_fps,
                 )
-                accepted = {state.value for state in scenario_accepted_states(scenario)}
-                is_error = record.valid and record.predicted_state not in accepted
+                if trial_video_path is not None and trial_video_path.exists():
+                    _append_jsonl(
+                        batch_directory / "trial-videos.jsonl",
+                        [
+                            {
+                                "trial_id": trial_id,
+                                "scenario_id": scenario.scenario_id,
+                                "path": str(trial_video_path.resolve()),
+                                "sha256": sha256_file(trial_video_path),
+                                "temporary": True,
+                                "review_then_delete": True,
+                            }
+                        ],
+                    )
+                is_error = not scenario_record_passes(scenario, record)
                 evidence_result = evidence.save(
                     record.trial_id, error_frame, is_error=is_error
                 )
@@ -324,12 +731,9 @@ def run_live_validation(
                     state.value
                     for state in scenario_accepted_states(scenario_by_id[record.scenario_id])
                 ],
-                "passed": record.valid
-                and record.predicted_state
-                in {
-                    state.value
-                    for state in scenario_accepted_states(scenario_by_id[record.scenario_id])
-                },
+                "passed": scenario_record_passes(
+                    scenario_by_id[record.scenario_id], record
+                ),
             }
             for record in records
         ]
@@ -1026,6 +1430,8 @@ def _await_ready(
     scenario: Scenario,
     repetition: int,
     repetitions: int,
+    calibration_face_scale: float | None,
+    session_face_scale: float | None,
 ) -> None:
     import cv2
 
@@ -1043,8 +1449,18 @@ def _await_ready(
             )
             signal = scenario_validation_signal(scenario, raw_signal)
             current_state = signal.state
-            target_matches = current_state in scenario_accepted_states(scenario)
-            if target_matches:
+            state_matches = current_state in scenario_accepted_states(scenario)
+            distance_matches, distance_status = scenario_distance_status(
+                scenario, probe, calibration_face_scale, session_face_scale
+            )
+            model_matches = state_matches
+            capture_matches, capture_status = scenario_capture_status(
+                scenario,
+                probe,
+                distance_matches=distance_matches,
+                distance_status=distance_status,
+            )
+            if capture_matches:
                 if target_since is None:
                     target_since = snapshot.captured_monotonic
             else:
@@ -1054,7 +1470,7 @@ def _await_ready(
                 if target_since is not None
                 else 0.0
             )
-            target_ready = target_matches and ready_seconds >= TARGET_READY_SECONDS
+            capture_ready = capture_matches and ready_seconds >= TARGET_READY_SECONDS
             accepted = "/".join(
                 state.value for state in scenario_accepted_states(scenario)
             )
@@ -1065,25 +1481,36 @@ def _await_ready(
                     f"{scenario.scenario_id} ({repetition}/{repetitions})",
                     scenario.instruction,
                     f"TARGET: {accepted}   CURRENT: {current_state.value}",
+                    scenario_acceptance_summary(scenario),
                     attention_direction_status(raw_signal)
                     if scenario.scenario_id in _DIRECTIONAL_ATTENTION_SCENARIOS
                     else "",
+                    attention_action_status(scenario, raw_signal),
+                    distance_status,
+                    f"MODEL TARGET: {'MATCH' if model_matches else 'NOT MATCH'} (diagnostic only)",
+                    capture_status,
                     (
-                        "TARGET READY - press SPACE to sample"
-                        if target_ready
-                        else "NOT READY - adjust/hold; SPACE still records this attempt"
+                        "CAPTURE READY - confirm real action with SPACE/ENTER"
+                        if capture_ready
+                        else "CAPTURE NOT READY - adjust image/face/eyes/distance"
                     ),
-                    "SPACE=begin 1s preparation   ESC=cancel batch",
+                    "SPACE/ENTER=confirm   ESC=question/cancel",
                 ),
             )
-            _draw_target_badge(canvas, target_ready)
+            _draw_target_badge(canvas, capture_ready)
             cv2.imshow(window, canvas)
             key = cv2.waitKey(1)
         if key & 0xFF == 27:
             raise ValidationCancelled("validation cancelled by user")
-        if key & 0xFF == 32:
+        if key & 0xFF in (10, 13, 32):
             _run_prepare_countdown(
-                camera, probe, window, scenario, TRIAL_PREPARE_SECONDS
+                camera,
+                probe,
+                window,
+                scenario,
+                TRIAL_PREPARE_SECONDS,
+                calibration_face_scale,
+                session_face_scale,
             )
             return
 
@@ -1094,6 +1521,8 @@ def _run_prepare_countdown(
     window: str,
     scenario: Scenario,
     duration_seconds: float,
+    calibration_face_scale: float | None,
+    session_face_scale: float | None,
 ) -> None:
     import cv2
 
@@ -1106,12 +1535,15 @@ def _run_prepare_countdown(
         else:
             last_sequence = snapshot.sequence
             probe.process_due(snapshot.frame, snapshot.captured_monotonic)
-            raw_signal = probe.observation(snapshot.captured_monotonic).signal(
-                scenario.signal_name
+            distance_matches, distance_status = scenario_distance_status(
+                scenario, probe, calibration_face_scale, session_face_scale
             )
-            signal = scenario_validation_signal(scenario, raw_signal)
-            current_state = signal.state
-            target_matches = current_state in scenario_accepted_states(scenario)
+            _, capture_status = scenario_capture_status(
+                scenario,
+                probe,
+                distance_matches=distance_matches,
+                distance_status=distance_status,
+            )
             canvas = _scenario_canvas(snapshot.frame, scenario)
             remaining = max(0.0, duration_seconds - (time.monotonic() - started))
             _put_lines(
@@ -1119,11 +1551,9 @@ def _run_prepare_countdown(
                 (
                     scenario.instruction,
                     f"PREPARE NOW - recording starts in {remaining:0.1f}s",
-                    f"CURRENT: {current_state.value}   "
-                    f"TARGET: {'MATCHED' if target_matches else 'NOT MATCHED'}",
-                    attention_direction_status(raw_signal)
-                    if scenario.scenario_id in _DIRECTIONAL_ATTENTION_SCENARIOS
-                    else "",
+                    "HOLD YOUR CONFIRMED REAL ACTION",
+                    distance_status,
+                    capture_status,
                     f"Complete the action, then hold it for {scenario.duration_seconds:g}s   ESC=cancel",
                 ),
             )
@@ -1142,18 +1572,24 @@ def _run_trial(
     trial_id: str,
     sampler: ResourceSampler,
     resource_samples: list[Any],
+    *,
+    trial_video_path: Path | None = None,
+    nominal_fps: float = 15.0,
 ) -> tuple[TrialRecord, Any, list[dict[str, Any]], bool]:
     import cv2
 
     started = time.monotonic()
     last_sequence = 0
     states: list[SignalValue] = []
+    state_times: list[float] = []
     candidate_started: float | None = None
     last_resource_sample = 0.0
     error_frame = None
     derived_records: list[dict[str, Any]] = []
     previous_runs = (-1, -1, -1)
     interrupted = False
+    video_writer = None
+    video_timestamps: list[float] = []
     while time.monotonic() - started < scenario.duration_seconds:
         snapshot = camera.buffer.latest(after_sequence=last_sequence)
         if snapshot is None:
@@ -1162,12 +1598,29 @@ def _run_trial(
                 break
             continue
         last_sequence = snapshot.sequence
+        if trial_video_path is not None:
+            if video_writer is None:
+                trial_video_path.parent.mkdir(parents=True, exist_ok=True)
+                frame_height, frame_width = snapshot.frame.shape[:2]
+                video_writer = cv2.VideoWriter(
+                    str(trial_video_path),
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    nominal_fps,
+                    (frame_width, frame_height),
+                )
+                if not video_writer.isOpened():
+                    raise RuntimeError(
+                        f"trial video could not be opened: {trial_video_path}"
+                    )
+            video_writer.write(snapshot.frame)
+            video_timestamps.append(snapshot.captured_monotonic - started)
         probe.process_due(snapshot.frame, snapshot.captured_monotonic)
         raw_signal = probe.observation(snapshot.captured_monotonic).signal(
             scenario.signal_name
         )
         signal = scenario_validation_signal(scenario, raw_signal)
         states.append(signal)
+        state_times.append(snapshot.captured_monotonic)
         runs = (
             probe.measurements.face.runs,
             probe.measurements.pose.runs,
@@ -1191,17 +1644,12 @@ def _run_trial(
         error_frame = snapshot.frame.copy()
         canvas = _scenario_canvas(snapshot.frame, scenario)
         remaining = max(0.0, scenario.duration_seconds - (time.monotonic() - started))
-        target_matches = signal.state in scenario_accepted_states(scenario)
         _put_lines(
             canvas,
             (
                 scenario.instruction,
-                f"Sampling {remaining:0.1f}s - no video saved",
-                f"CURRENT: {signal.state.value}   "
-                f"TARGET: {'MAINTAINED' if target_matches else 'LOST - still recorded'}",
-                attention_direction_status(raw_signal)
-                if scenario.scenario_id in _DIRECTIONAL_ATTENTION_SCENARIOS
-                else "",
+                f"RECORDING SCORED INTERVAL: {remaining:0.1f}s",
+                "HOLD YOUR CONFIRMED REAL ACTION - model result hidden",
             ),
         )
         cv2.imshow(window, canvas)
@@ -1213,6 +1661,20 @@ def _run_trial(
             resource_samples.append(sampler.sample())
             last_resource_sample = now
     ended = time.monotonic()
+    if video_writer is not None:
+        video_writer.release()
+        timestamp_path = trial_video_path.with_suffix(".mp4.timestamps.json")
+        timestamp_path.write_text(
+            json.dumps(
+                {
+                    "video_path": str(trial_video_path.resolve()),
+                    "nominal_fps": nominal_fps,
+                    "frame_elapsed_seconds": [round(value, 6) for value in video_timestamps],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     if interrupted:
         record = TrialRecord(
             trial_id=trial_id,
@@ -1229,6 +1691,10 @@ def _run_trial(
         )
         return record, error_frame, derived_records, True
     predicted, confidence, metrics, reason, coverage = _aggregate_states(states)
+    for state in (SignalState.COMPLIANT, SignalState.VIOLATION, SignalState.UNKNOWN):
+        metrics[f"longest_{state.value}_run_seconds"] = _longest_state_run_seconds(
+            states, state_times, state
+        )
     record = TrialRecord(
         trial_id=trial_id,
         scenario_id=scenario.scenario_id,
@@ -1245,6 +1711,33 @@ def _run_trial(
         observable_fraction=coverage,
     )
     return record, error_frame, derived_records, False
+
+
+def _longest_state_run_seconds(
+    states: Sequence[SignalValue],
+    captured_times: Sequence[float],
+    target: SignalState,
+    *,
+    maximum_gap_seconds: float = 0.5,
+) -> float:
+    if len(states) != len(captured_times):
+        raise ValueError("state and timestamp counts must match")
+    longest = 0.0
+    started: float | None = None
+    previous: float | None = None
+    for signal, captured in zip(states, captured_times, strict=True):
+        if signal.state is target:
+            if (
+                started is None
+                or previous is None
+                or captured - previous > maximum_gap_seconds
+            ):
+                started = captured
+            longest = max(longest, captured - started)
+        else:
+            started = None
+        previous = captured
+    return longest
 
 
 def _aggregate_states(
@@ -1291,19 +1784,63 @@ def _scenario_canvas(frame: Any, scenario: Scenario) -> Any:
 def _put_lines(frame: Any, lines: Sequence[str]) -> None:
     import cv2
 
-    height = 28 + len(lines) * 30
+    font_scale = 0.46
+    line_height = 22
+    rendered_lines = [
+        rendered
+        for line in lines
+        for rendered in _wrap_display_line(frame, line, font_scale)
+        if line
+    ]
+    height = 18 + len(rendered_lines) * line_height
     cv2.rectangle(frame, (0, 0), (frame.shape[1], height), (20, 20, 20), -1)
-    for index, line in enumerate(lines):
+    for index, line in enumerate(rendered_lines):
         cv2.putText(
             frame,
             line,
-            (14, 30 + index * 30),
+            (14, 26 + index * line_height),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.62,
+            font_scale,
             (255, 255, 255),
             1,
             cv2.LINE_AA,
         )
+
+
+def _wrap_display_line(frame: Any, line: str, font_scale: float) -> list[str]:
+    """Wrap overlay text inside the camera frame without horizontal clipping."""
+
+    import cv2
+
+    max_width = max(40, frame.shape[1] - 28)
+    rendered: list[str] = []
+    current = ""
+    for word in line.split():
+        candidate = f"{current} {word}".strip()
+        width = cv2.getTextSize(
+            candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1
+        )[0][0]
+        if width <= max_width:
+            current = candidate
+            continue
+        if current:
+            rendered.append(current)
+            current = word
+        else:
+            current = ""
+            for char in word:
+                candidate = current + char
+                width = cv2.getTextSize(
+                    candidate, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1
+                )[0][0]
+                if width <= max_width:
+                    current = candidate
+                else:
+                    rendered.append(current)
+                    current = char
+    if current:
+        rendered.append(current)
+    return rendered or [line]
 
 
 def _draw_target_badge(frame: Any, ready: bool) -> None:
@@ -1313,7 +1850,7 @@ def _draw_target_badge(frame: Any, ready: bool) -> None:
 
     height, width = frame.shape[:2]
     color = (55, 200, 55) if ready else (60, 170, 230)
-    label = "TARGET READY" if ready else "TARGET NOT READY"
+    label = "CAPTURE READY" if ready else "CAPTURE NOT READY"
     left = max(12, width - 250)
     top = max(12, height - 76)
     cv2.rectangle(frame, (left, top), (width - 12, height - 12), (20, 20, 20), -1)

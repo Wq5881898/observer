@@ -34,6 +34,12 @@ class CalibrationCancelled(RuntimeError):
     pass
 
 
+class CalibrationInputError(RuntimeError):
+    """Expected camera/setup failure that should be shown without a traceback."""
+
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class CalibrationTimings:
     precheck_seconds: float = 5.0
@@ -112,7 +118,10 @@ def run_guided_calibration(
     window = "Observer calibration"
     try:
         if not camera.start():
-            raise RuntimeError(camera.stats.last_error or "camera could not be opened")
+            raise CalibrationInputError(
+                "Camera unavailable: it may be in use by another application, "
+                "disabled by Windows privacy settings, or disconnected."
+            )
         first = _wait_for_frame(camera, 5.0)
         environment = current_environment(config, first.frame.shape)
         probe = MediapipeVisionProbe(models, config.inference)
@@ -123,7 +132,7 @@ def run_guided_calibration(
             camera,
             probe,
             window,
-            "Precheck: face, eyes and both shoulders visible",
+            "Precheck: full face and both eyes visible; shoulders are optional",
             selected.precheck_seconds,
             require_quality_coverage=0.90,
         )
@@ -146,7 +155,7 @@ def run_guided_calibration(
             raise RuntimeError(
                 "posture calibration collected "
                 f"{len(posture_samples)}/{posture_attempts} valid samples; "
-                "75 are required. Keep both ears and shoulders fully visible."
+                "75 are required. Keep the full face and both eyes visible."
             )
         posture = fit_posture_calibration(
             posture_samples,
@@ -380,6 +389,11 @@ def _run_preview_phase(
             snapshot.frame, snapshot.captured_monotonic, frozenset({"face", "pose"})
         )
         if probe.measurements.pose.runs > previous_pose_runs:
+            previous_pose_runs = probe.measurements.pose.runs
+            if _features_are_warming_up(
+                probe.latest_attention_features, probe.latest_posture_features
+            ):
+                continue
             checked += 1
             accepted = (
                 probe.latest_quality is not None
@@ -406,7 +420,6 @@ def _run_preview_phase(
                     current_reasons.extend(probe.latest_posture_features.reasons)
                 for reason in dict.fromkeys(current_reasons):
                     rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
-            previous_pose_runs = probe.measurements.pose.runs
         preview = cv2.flip(snapshot.frame, 1)
         remaining = max(0.0, duration_seconds - (time.monotonic() - started))
         _put_text(preview, f"{message}  {remaining:0.1f}s")
@@ -421,11 +434,98 @@ def _run_preview_phase(
                     rejection_reasons.items(), key=lambda item: item[1], reverse=True
                 )[:3]
             ) or "required landmarks unavailable"
-            raise RuntimeError(
+            technical = (
                 f"precheck quality coverage {coverage:.1%} is below "
                 f"{require_quality_coverage:.0%} across {checked} model observations: "
                 f"{reason}"
             )
+            friendly = _precheck_failure_message(rejection_reasons)
+            _show_calibration_error(camera, window, friendly)
+            raise CalibrationInputError(f"{friendly} Technical details: {technical}")
+
+
+def _features_are_warming_up(*features: Any) -> bool:
+    return any(
+        feature is not None
+        and any("temporal smoother is warming up" in reason for reason in feature.reasons)
+        for feature in features
+    )
+
+
+def _precheck_failure_message(rejection_reasons: dict[str, int]) -> str:
+    dark = rejection_reasons.get("frame too dark", 0)
+    missing_face = sum(
+        count
+        for reason, count in rejection_reasons.items()
+        if "face" in reason or "iris" in reason or "eye" in reason
+    )
+    if dark > 0 and missing_face > 0:
+        return (
+            "No usable camera image. The camera may be occupied by another app, "
+            "the privacy shutter may be closed, or the lens may be covered."
+        )
+    return (
+        "Calibration cannot see the full face and both eyes reliably. "
+        "Check camera access, framing, and lighting."
+    )
+
+
+def _show_calibration_error(
+    camera: CameraWorker,
+    window: str,
+    message: str,
+    *,
+    timeout_seconds: float = 30.0,
+) -> None:
+    """Keep a readable setup error on screen until acknowledged or timed out."""
+
+    import cv2
+    import numpy as np
+
+    acknowledged = False
+
+    def on_mouse(event: int, _x: int, _y: int, _flags: int, _parameter: Any) -> None:
+        nonlocal acknowledged
+        if event == cv2.EVENT_LBUTTONDOWN:
+            acknowledged = True
+
+    cv2.setMouseCallback(window, on_mouse)
+    deadline = time.monotonic() + timeout_seconds
+    while not acknowledged and time.monotonic() < deadline:
+        snapshot = camera.buffer.latest()
+        if snapshot is None:
+            preview = np.zeros((480, 640, 3), dtype=np.uint8)
+        else:
+            preview = cv2.flip(snapshot.frame, 1)
+        height, width = preview.shape[:2]
+        cv2.rectangle(preview, (0, 0), (width, min(height, 170)), (20, 20, 20), -1)
+        words = message.split()
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) > 72 and current:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        for index, line in enumerate((*lines[:3], "Click or press SPACE/ESC to close")):
+            cv2.putText(
+                preview,
+                line,
+                (12, 32 + index * 34),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.58,
+                (255, 255, 255) if index < len(lines[:3]) else (0, 215, 255),
+                1,
+                cv2.LINE_AA,
+            )
+        cv2.imshow(window, preview)
+        key = cv2.waitKeyEx(30)
+        if key & 0xFF in {27, 32, 13}:
+            break
 
 
 def _collect_feature_phase(

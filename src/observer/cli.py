@@ -7,6 +7,7 @@ import platform
 import sys
 import time
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -14,6 +15,263 @@ from observer.camera import CameraWorker
 from observer.config import load_config
 from observer.models import sha256_file, verify_model_directory
 from observer.resources import ResourceSampler, percentile, summarize_resources
+
+
+GUIDED_DEBUG_CUES = (
+    (0.0, 180.0, "natural", "Work naturally. No staged action."),
+    (180.0, 205.0, "near_lower", "Move closer. Look at SCREEN BOTTOM. NO PHONE."),
+    (205.0, 220.0, "normal_1", "NORMAL. Look at the screen. NO PHONE."),
+    (220.0, 232.0, "outside_left", "Look LEFT beyond the screen. NO PHONE."),
+    (232.0, 245.0, "normal_2", "NORMAL. Look at the screen. NO PHONE."),
+    (245.0, 260.0, "phone", "Hold and use PHONE visibly in frame."),
+    (260.0, 300.0, "natural_end", "Put PHONE DOWN. Work naturally."),
+)
+
+ATTENTION_MINUTE_CUES = (
+    (0.0, 10.0, "normal_start", "NORMAL. Look at the screen center."),
+    (10.0, 25.0, "outside_left_down", "Look LEFT-DOWN beyond the screen."),
+    (25.0, 35.0, "normal_middle", "NORMAL. Look at the screen center."),
+    (35.0, 50.0, "near_lower_inside", "Move closer. Look INSIDE screen lower-left."),
+    (50.0, 60.0, "normal_end", "NORMAL. Look at the screen center."),
+)
+
+ATTENTION_BOUNDARY_CUES = (
+    (0.0, 3.0, "prep_a01", "PREP A01: natural distance, screen center."),
+    (3.0, 13.0, "score_a01", "A01 HOLD: natural distance, screen center."),
+    (13.0, 16.0, "prep_a02", "PREP A02: look at fixed outside LEFT-LOW point."),
+    (16.0, 28.0, "score_a02", "A02 HOLD: fixed outside LEFT-LOW point."),
+    (28.0, 31.0, "prep_a03", "PREP A03: return to screen center."),
+    (31.0, 39.0, "score_a03", "A03 HOLD: screen center recovery."),
+    (39.0, 42.0, "prep_a04", "PREP A04: look at fixed outside RIGHT-LOW point."),
+    (42.0, 54.0, "score_a04", "A04 HOLD: fixed outside RIGHT-LOW point."),
+    (54.0, 57.0, "prep_a05", "PREP A05: return to screen center."),
+    (57.0, 65.0, "score_a05", "A05 HOLD: screen center recovery."),
+    (65.0, 68.0, "prep_a06", "PREP A06: move closer; fixed INSIDE left-low."),
+    (68.0, 80.0, "score_a06", "A06 HOLD: closer, fixed INSIDE left-low."),
+    (80.0, 83.0, "prep_a07", "PREP A07: stay closer; fixed INSIDE right-low."),
+    (83.0, 95.0, "score_a07", "A07 HOLD: closer, fixed INSIDE right-low."),
+    (95.0, 98.0, "prep_a08", "PREP A08: move FAR; look at screen center."),
+    (98.0, 108.0, "score_a08", "A08 HOLD: far distance, screen center."),
+    (108.0, 111.0, "prep_a09", "PREP A09: far; fixed INSIDE left-low."),
+    (111.0, 123.0, "score_a09", "A09 HOLD: far, fixed INSIDE left-low."),
+    (123.0, 126.0, "prep_a10", "PREP A10: far; fixed INSIDE right-low."),
+    (126.0, 138.0, "score_a10", "A10 HOLD: far, fixed INSIDE right-low."),
+    (138.0, 141.0, "prep_a11", "PREP A11: natural distance, screen center."),
+    (141.0, 151.0, "score_a11", "A11 HOLD: final screen center."),
+)
+
+ATTENTION_BOUNDARY_CASES = {
+    "a01": {"expected_state": "compliant", "label": "natural_center"},
+    "a02": {"expected_state": "violation", "label": "outside_left_low"},
+    "a03": {"expected_state": "compliant", "label": "center_recovery_1"},
+    "a04": {"expected_state": "violation", "label": "outside_right_low"},
+    "a05": {"expected_state": "compliant", "label": "center_recovery_2"},
+    "a06": {"expected_state": "compliant", "label": "near_inside_left_low"},
+    "a07": {"expected_state": "compliant", "label": "near_inside_right_low"},
+    "a08": {"expected_state": "compliant", "label": "far_center"},
+    "a09": {"expected_state": "compliant", "label": "far_inside_left_low"},
+    "a10": {"expected_state": "compliant", "label": "far_inside_right_low"},
+    "a11": {"expected_state": "compliant", "label": "final_center"},
+}
+
+GUIDED_DEBUG_PLANS = {
+    "full": GUIDED_DEBUG_CUES,
+    "attention-minute": ATTENTION_MINUTE_CUES,
+    "attention-boundary": ATTENTION_BOUNDARY_CUES,
+}
+
+
+def _guided_case_metadata(cue_id: str) -> dict[str, object] | None:
+    if cue_id.startswith("prep_a"):
+        phase = "preparation"
+        case_id = cue_id.removeprefix("prep_")
+    elif cue_id.startswith("score_a"):
+        phase = "scored_hold"
+        case_id = cue_id.removeprefix("score_")
+    else:
+        return None
+    configured = ATTENTION_BOUNDARY_CASES.get(case_id)
+    if configured is None:
+        return None
+    return {
+        "case_id": case_id.upper(),
+        "phase": phase,
+        "scored": phase == "scored_hold",
+        **configured,
+    }
+
+
+def _record_guided_case_observation(
+    summaries: dict[str, dict[str, object]],
+    active_violation_starts: dict[str, float],
+    case_metadata: dict[str, object] | None,
+    elapsed_seconds: float,
+    state: str,
+) -> None:
+    current_case_id = (
+        str(case_metadata["case_id"])
+        if case_metadata is not None and bool(case_metadata["scored"])
+        else None
+    )
+    for active_case_id in tuple(active_violation_starts):
+        if active_case_id == current_case_id:
+            continue
+        entry = summaries[active_case_id]
+        end_seconds = float(entry["last_elapsed_seconds"])
+        start_seconds = active_violation_starts.pop(active_case_id)
+        runs = entry["exact_violation_runs"]
+        assert isinstance(runs, list)
+        runs.append(
+            {
+                "start_seconds": round(start_seconds, 3),
+                "end_seconds": round(end_seconds, 3),
+                "duration_seconds": round(max(0.0, end_seconds - start_seconds), 3),
+            }
+        )
+    if current_case_id is None or case_metadata is None:
+        return
+    entry = summaries.setdefault(
+        current_case_id,
+        {
+            "case_id": current_case_id,
+            "label": case_metadata["label"],
+            "expected_state": case_metadata["expected_state"],
+            "first_elapsed_seconds": round(elapsed_seconds, 3),
+            "last_elapsed_seconds": round(elapsed_seconds, 3),
+            "state_counts": {},
+            "exact_violation_runs": [],
+        },
+    )
+    entry["last_elapsed_seconds"] = round(elapsed_seconds, 3)
+    counts = entry["state_counts"]
+    assert isinstance(counts, dict)
+    counts[state] = counts.get(state, 0) + 1
+    if state == "violation":
+        active_violation_starts.setdefault(current_case_id, elapsed_seconds)
+    elif current_case_id in active_violation_starts:
+        start_seconds = active_violation_starts.pop(current_case_id)
+        runs = entry["exact_violation_runs"]
+        assert isinstance(runs, list)
+        runs.append(
+            {
+                "start_seconds": round(start_seconds, 3),
+                "end_seconds": round(elapsed_seconds, 3),
+                "duration_seconds": round(max(0.0, elapsed_seconds - start_seconds), 3),
+            }
+        )
+
+
+def _finalize_guided_case_summaries(
+    summaries: dict[str, dict[str, object]],
+    active_violation_starts: dict[str, float],
+) -> list[dict[str, object]]:
+    _record_guided_case_observation(
+        summaries,
+        active_violation_starts,
+        None,
+        0.0,
+        "unknown",
+    )
+    rendered = []
+    for case_id in ATTENTION_BOUNDARY_CASES:
+        public_case_id = case_id.upper()
+        entry = summaries.get(public_case_id)
+        if entry is None:
+            continue
+        counts = entry["state_counts"]
+        runs = entry["exact_violation_runs"]
+        assert isinstance(counts, dict)
+        assert isinstance(runs, list)
+        total = sum(int(value) for value in counts.values())
+        rendered.append(
+            {
+                **entry,
+                "observation_count": total,
+                "state_ratios": {
+                    state: round(int(count) / total, 4) if total else 0.0
+                    for state, count in counts.items()
+                },
+                "longest_exact_violation_seconds": round(
+                    max(
+                        (float(run["duration_seconds"]) for run in runs),
+                        default=0.0,
+                    ),
+                    3,
+                ),
+            }
+        )
+    return rendered
+
+
+def _guided_debug_cue(
+    elapsed_seconds: float,
+    cues: tuple[tuple[float, float, str, str], ...] = GUIDED_DEBUG_CUES,
+) -> tuple[str, str, float]:
+    for start, end, cue_id, instruction in cues:
+        if start <= elapsed_seconds < end:
+            return cue_id, instruction, end - elapsed_seconds
+    return "complete", "Test complete", 0.0
+
+
+def _show_guided_debug_cue(
+    frame: object,
+    elapsed_seconds: float,
+    cues: tuple[tuple[float, float, str, str], ...],
+) -> tuple[bool, str]:
+    import cv2
+
+    cue_id, instruction, remaining = _guided_debug_cue(elapsed_seconds, cues)
+    case_metadata = _guided_case_metadata(cue_id)
+    cue_index = next(
+        (
+            index
+            for index, (_, _, configured_id, _) in enumerate(cues, 1)
+            if configured_id == cue_id
+        ),
+        len(cues),
+    )
+    preview = frame.copy()
+    cv2.rectangle(preview, (0, 0), (preview.shape[1], 112), (20, 20, 20), -1)
+    cv2.putText(
+        preview,
+        (
+            f"CASE {case_metadata['case_id']}   {str(case_metadata['phase']).upper()}"
+            if case_metadata is not None
+            else f"STEP {cue_index}/{len(cues)}   {cue_id.upper()}"
+        ),
+        (18, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.68,
+        (0, 220, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        preview,
+        instruction,
+        (18, 66),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.56,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        preview,
+        (
+            f"TIME {remaining:04.1f}s   ESC cancels   model result hidden"
+            if case_metadata is not None
+            else f"HOLD {remaining:04.1f}s   ESC cancels   model result hidden"
+        ),
+        (18, 98),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (0, 220, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.imshow("Observer guided debug test", preview)
+    return (cv2.waitKey(1) & 0xFF) == 27, cue_id
 
 
 def _doctor(config_path: Path | None) -> int:
@@ -86,9 +344,36 @@ def _vision_smoke(
     models_dir: Path,
     seconds: float,
     profile_path: Path | None = None,
+    evidence_dir: Path | None = None,
+    report_path: Path | None = None,
+    debug_video_path: Path | None = None,
+    guided_debug_cues: bool = False,
+    guided_debug_plan: str | None = None,
 ) -> int:
     if seconds <= 0:
         raise ValueError("seconds must be positive")
+    if debug_video_path is not None:
+        if debug_video_path.suffix.lower() != ".mp4":
+            raise ValueError("temporary debug video path must end in .mp4")
+        timestamps_path = debug_video_path.with_suffix(
+            debug_video_path.suffix + ".timestamps.json"
+        )
+        trace_path = debug_video_path.with_suffix(debug_video_path.suffix + ".trace.jsonl")
+        if debug_video_path.exists() or timestamps_path.exists() or trace_path.exists():
+            raise FileExistsError(
+                "temporary debug video or timestamp index already exists; choose a new path"
+            )
+    if guided_debug_cues and guided_debug_plan is not None:
+        raise ValueError("choose either --guided-debug-cues or --guided-debug-plan")
+    selected_plan = guided_debug_plan or ("full" if guided_debug_cues else None)
+    selected_cues = GUIDED_DEBUG_PLANS.get(selected_plan, ())
+    if selected_plan is not None and not selected_cues:
+        raise ValueError(f"unknown guided debug plan: {selected_plan}")
+    guided_debug_enabled = bool(selected_cues)
+    if guided_debug_enabled:
+        seconds = float(selected_cues[-1][1])
+    if guided_debug_enabled and debug_video_path is None:
+        raise ValueError("guided debug cues require --debug-video for objective review")
     from observer.vision import MediapipeVisionProbe
 
     config = load_config(config_path)
@@ -99,6 +384,14 @@ def _vision_smoke(
     last_sequence = 0
     next_resource_sample = 0.0
     last_observation = None
+    debug_video_writer = None
+    debug_video_timestamps: list[float] = []
+    debug_trace_handle = None
+    last_debug_cue_id: str | None = None
+    guided_debug_cancelled = False
+    guided_case_summaries: dict[str, dict[str, object]] = {}
+    guided_case_active_violations: dict[str, float] = {}
+    session_attention_setup: dict[str, object] | None = None
     signal_state_counts: dict[str, dict[str, int]] = {}
     signal_reason_counts: dict[str, dict[str, int]] = {}
     signal_metric_values: dict[str, dict[str, list[float]]] = {}
@@ -111,6 +404,33 @@ def _vision_smoke(
         "posture": {},
     }
     previous_feature_runs = {"attention": 0, "posture": 0}
+    evidence_store = None
+    evidence_records: list[dict[str, object]] = []
+    evidence_counts: dict[str, int] = {}
+    evidence_regular_counts: dict[str, int] = {}
+    evidence_last_saved: dict[str, float] = {}
+    sustained_evidence_saved: set[str] = set()
+    active_violation_intervals: dict[str, dict[str, float]] = {}
+    violation_intervals: dict[str, list[dict[str, object]]] = {}
+    tracked_evidence_signals = {
+        "away",
+        "phone_held",
+        "attention_away",
+        "posture_deviation",
+        "ergonomic_risk",
+    }
+    evidence_trigger_seconds = {
+        rule.signal_name: rule.trigger_after_seconds
+        for rule in config.rules
+        if rule.signal_name in tracked_evidence_signals
+    }
+    last_elapsed_seconds = 0.0
+    if evidence_dir is not None:
+        from observer.validation import ErrorEvidenceStore, EvidencePolicy
+
+        evidence_store = ErrorEvidenceStore(
+            evidence_dir, EvidencePolicy(enabled=True, retention_days=7)
+        )
     try:
         if not camera.start():
             print(json.dumps({"camera": asdict(camera.stats)}, indent=2, ensure_ascii=False))
@@ -130,6 +450,29 @@ def _vision_smoke(
             environment = current_environment(config, first_snapshot.frame.shape)
             profile = load_profile(profile_path, environment)
         probe = MediapipeVisionProbe(models, config.inference, profile)
+        if profile is not None:
+            from observer.alignment import (
+                AlignmentCancelled,
+                guide_attention_session_baseline,
+            )
+
+            try:
+                session_attention_setup = asdict(
+                    guide_attention_session_baseline(camera, probe)
+                )
+            except (AlignmentCancelled, RuntimeError) as exc:
+                print(
+                    json.dumps(
+                        {
+                            "status": "session_attention_setup_failed",
+                            "message": str(exc),
+                            "frames_saved": 0,
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                )
+                return 2
         sampler = ResourceSampler()
         started = time.monotonic()
         next_resource_sample = started
@@ -139,8 +482,94 @@ def _vision_smoke(
                 time.sleep(0.005)
                 continue
             last_sequence = snapshot.sequence
+            last_elapsed_seconds = snapshot.captured_monotonic - started
+            guided_cue_id = "complete"
+            guided_case_metadata = None
+            if guided_debug_enabled:
+                guided_cue_id, _, _ = _guided_debug_cue(
+                    last_elapsed_seconds, selected_cues
+                )
+                guided_case_metadata = _guided_case_metadata(guided_cue_id)
+            if debug_video_path is not None:
+                if debug_video_writer is None:
+                    import cv2
+
+                    debug_video_path.parent.mkdir(parents=True, exist_ok=True)
+                    frame_height, frame_width = snapshot.frame.shape[:2]
+                    debug_video_writer = cv2.VideoWriter(
+                        str(debug_video_path),
+                        cv2.VideoWriter_fourcc(*"mp4v"),
+                        config.camera.capture_fps,
+                        (frame_width, frame_height),
+                    )
+                    if not debug_video_writer.isOpened():
+                        raise RuntimeError(
+                            f"temporary debug video could not be opened: {debug_video_path}"
+                        )
+                    trace_path = debug_video_path.with_suffix(
+                        debug_video_path.suffix + ".trace.jsonl"
+                    )
+                    debug_trace_handle = trace_path.open("x", encoding="utf-8")
+                debug_video_writer.write(snapshot.frame)
+                debug_video_timestamps.append(last_elapsed_seconds)
             probe.process_due(snapshot.frame, snapshot.captured_monotonic)
             last_observation = probe.observation(snapshot.captured_monotonic)
+            if debug_trace_handle is not None:
+                guided_cue = None
+                if guided_debug_enabled:
+                    cue_id, _, remaining = _guided_debug_cue(
+                        last_elapsed_seconds, selected_cues
+                    )
+                    guided_cue = {
+                        "cue_id": cue_id,
+                        "remaining_seconds": round(remaining, 3),
+                        "case": guided_case_metadata,
+                    }
+                debug_trace_handle.write(
+                    json.dumps(
+                        {
+                            "frame_index": len(debug_video_timestamps) - 1,
+                            "elapsed_seconds": round(last_elapsed_seconds, 3),
+                            "guided_cue": guided_cue,
+                            "signals": {
+                                signal_name: {
+                                    "state": observed.state.value,
+                                    "reason": observed.reason,
+                                    "metrics": dict(observed.metrics),
+                                }
+                                for signal_name, observed in last_observation.signals.items()
+                            },
+                            "derived": probe.derived_snapshot(),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+            if guided_debug_enabled:
+                cancelled, cue_id = _show_guided_debug_cue(
+                    snapshot.frame, last_elapsed_seconds, selected_cues
+                )
+                if cue_id != last_debug_cue_id:
+                    try:
+                        import winsound
+
+                        winsound.MessageBeep(winsound.MB_OK)
+                    except (ImportError, RuntimeError):
+                        pass
+                    last_debug_cue_id = cue_id
+                if cancelled:
+                    guided_debug_cancelled = True
+                    break
+            if selected_plan == "attention-boundary":
+                attention_signal = last_observation.signals.get("attention_away")
+                if attention_signal is not None:
+                    _record_guided_case_observation(
+                        guided_case_summaries,
+                        guided_case_active_violations,
+                        guided_case_metadata,
+                        last_elapsed_seconds,
+                        attention_signal.state.value,
+                    )
             for name, signal in last_observation.signals.items():
                 counts = signal_state_counts.setdefault(name, {})
                 counts[signal.state.value] = counts.get(signal.state.value, 0) + 1
@@ -150,6 +579,67 @@ def _vision_smoke(
                 metrics = signal_metric_values.setdefault(name, {})
                 for metric_name, value in signal.metrics.items():
                     metrics.setdefault(metric_name, []).append(value)
+                if name in tracked_evidence_signals:
+                    _track_violation_interval(
+                        name,
+                        signal.state.value,
+                        last_elapsed_seconds,
+                        active_violation_intervals,
+                        violation_intervals,
+                    )
+                capture_kind = _evidence_capture_kind(
+                    name,
+                    signal.state.value,
+                    last_elapsed_seconds,
+                    active_violation_intervals,
+                    evidence_regular_counts,
+                    evidence_last_saved,
+                    sustained_evidence_saved,
+                    evidence_trigger_seconds,
+                    snapshot.captured_monotonic,
+                )
+                if evidence_store is not None and capture_kind is not None:
+                    sequence_number = evidence_counts.get(name, 0) + 1
+                    saved = evidence_store.save(
+                        f"natural-{name}-{sequence_number}",
+                        snapshot.frame,
+                        is_error=True,
+                    )
+                    if saved is not None:
+                        absolute_path = (
+                            evidence_dir / saved["relative_path"]
+                        ).resolve()
+                        evidence_records.append(
+                            {
+                                "signal": name,
+                                "sequence": sequence_number,
+                                "capture_kind": capture_kind,
+                                "elapsed_seconds": round(
+                                    snapshot.captured_monotonic - started, 3
+                                ),
+                                "reason": signal.reason,
+                                "metrics": dict(signal.metrics),
+                                "all_signals": {
+                                    signal_name: {
+                                        "state": observed.state.value,
+                                        "reason": observed.reason,
+                                        "metrics": dict(observed.metrics),
+                                    }
+                                    for signal_name, observed in last_observation.signals.items()
+                                },
+                                "path": str(absolute_path),
+                                "sha256": saved["sha256"],
+                                "delete_after_utc": saved["delete_after_utc"],
+                            }
+                        )
+                        evidence_counts[name] = sequence_number
+                        evidence_last_saved[name] = snapshot.captured_monotonic
+                        if capture_kind == "sustained_threshold":
+                            sustained_evidence_saved.add(name)
+                        else:
+                            evidence_regular_counts[name] = (
+                                evidence_regular_counts.get(name, 0) + 1
+                            )
             current_feature_runs = {
                 "attention": probe.measurements.face.runs,
                 "posture": probe.measurements.pose.runs,
@@ -174,9 +664,56 @@ def _vision_smoke(
         if probe is not None:
             probe.close()
         camera.stop()
+        if debug_video_writer is not None:
+            debug_video_writer.release()
+        if debug_trace_handle is not None:
+            debug_trace_handle.close()
+        if guided_debug_enabled:
+            import cv2
+
+            try:
+                cv2.destroyWindow("Observer guided debug test")
+            except cv2.error:
+                pass
+
+    _finish_violation_intervals(
+        active_violation_intervals,
+        violation_intervals,
+        last_elapsed_seconds,
+    )
+    debug_video = _finalize_debug_video(
+        debug_video_path,
+        debug_video_timestamps,
+        config.camera.capture_fps,
+    )
 
     result = {
-        "duration_seconds": seconds,
+        "duration_seconds": round(last_elapsed_seconds, 3),
+        "session_attention_setup": session_attention_setup,
+        "guided_debug": {
+            "enabled": guided_debug_enabled,
+            "plan": selected_plan,
+            "cancelled": guided_debug_cancelled,
+            "cues": [
+                {
+                    "start_seconds": start,
+                    "end_seconds": end,
+                    "cue_id": cue_id,
+                    "instruction": instruction,
+                    "case": _guided_case_metadata(cue_id),
+                }
+                for start, end, cue_id, instruction in selected_cues
+            ]
+            if guided_debug_enabled
+            else [],
+            "case_summaries": _finalize_guided_case_summaries(
+                guided_case_summaries,
+                guided_case_active_violations,
+            )
+            if selected_plan == "attention-boundary"
+            else [],
+            "requires_video_truth_review": selected_plan == "attention-boundary",
+        },
         "camera": asdict(camera.stats),
         "vision": probe.summary() if probe is not None else None,
         "last_signals": (
@@ -197,13 +734,66 @@ def _vision_smoke(
         "signal_metric_summary": _numeric_summary(signal_metric_values),
         "feature_reason_counts": feature_reason_counts,
         "feature_metric_summary": _numeric_summary(feature_metric_values),
+        "evidence": {
+            "enabled": evidence_store is not None,
+            "maximum_regular_per_signal": 3 if evidence_store is not None else 0,
+            "maximum_sustained_per_signal": 1 if evidence_store is not None else 0,
+            "minimum_interval_seconds": 30.0,
+            "records": evidence_records,
+        },
+        "temporary_debug_video": debug_video,
+        "violation_intervals": violation_intervals,
         "resources": asdict(summarize_resources(samples, config.resources)),
     }
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    rendered = json.dumps(result, indent=2, ensure_ascii=False)
+    if report_path is not None:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(rendered, encoding="utf-8")
+    print(rendered)
     if probe is None:
         return 3
     runs = probe.measurements
     return 0 if runs.face.runs and runs.pose.runs and runs.object.runs else 4
+
+
+def _finalize_debug_video(
+    video_path: Path | None,
+    frame_elapsed_seconds: list[float],
+    nominal_fps: float,
+) -> dict[str, object]:
+    if video_path is None:
+        return {"enabled": False}
+    if not video_path.exists():
+        return {"enabled": True, "written": False, "path": str(video_path.resolve())}
+    timestamps_path = video_path.with_suffix(video_path.suffix + ".timestamps.json")
+    trace_path = video_path.with_suffix(video_path.suffix + ".trace.jsonl")
+    timestamp_document = {
+        "video_path": str(video_path.resolve()),
+        "nominal_fps": nominal_fps,
+        "frame_count": len(frame_elapsed_seconds),
+        "frame_elapsed_seconds": [round(value, 3) for value in frame_elapsed_seconds],
+    }
+    timestamps_path.write_text(
+        json.dumps(timestamp_document, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    delete_after = datetime.now(timezone.utc) + timedelta(days=1)
+    return {
+        "enabled": True,
+        "written": True,
+        "temporary": True,
+        "path": str(video_path.resolve()),
+        "timestamps_path": str(timestamps_path.resolve()),
+        "trace_path": str(trace_path.resolve()) if trace_path.exists() else None,
+        "frame_count": len(frame_elapsed_seconds),
+        "nominal_fps": nominal_fps,
+        "size_bytes": video_path.stat().st_size,
+        "sha256": sha256_file(video_path),
+        "timestamps_sha256": sha256_file(timestamps_path),
+        "trace_sha256": sha256_file(trace_path) if trace_path.exists() else None,
+        "review_then_delete": True,
+        "suggested_delete_after_utc": delete_after.isoformat(),
+    }
 
 
 def _numeric_summary(
@@ -226,12 +816,114 @@ def _numeric_summary(
     }
 
 
+def _evidence_capture_kind(
+    signal_name: str,
+    state: str,
+    elapsed_seconds: float,
+    active: dict[str, dict[str, float]],
+    regular_counts: dict[str, int],
+    last_saved: dict[str, float],
+    sustained_saved: set[str],
+    trigger_seconds: dict[str, float],
+    captured_monotonic: float,
+) -> str | None:
+    if state != "violation":
+        return None
+    current = active.get(signal_name)
+    threshold = trigger_seconds.get(signal_name)
+    if (
+        current is not None
+        and threshold is not None
+        and signal_name not in sustained_saved
+        and elapsed_seconds - current["start_seconds"] >= threshold
+    ):
+        return "sustained_threshold"
+    if (
+        regular_counts.get(signal_name, 0) < 3
+        and captured_monotonic - last_saved.get(signal_name, float("-inf")) >= 30.0
+    ):
+        return "representative"
+    return None
+
+
+def _track_violation_interval(
+    signal_name: str,
+    state: str,
+    elapsed_seconds: float,
+    active: dict[str, dict[str, float]],
+    completed: dict[str, list[dict[str, object]]],
+    *,
+    gap_tolerance_seconds: float = 0.5,
+) -> None:
+    current = active.get(signal_name)
+    if state == "violation":
+        if current is None:
+            active[signal_name] = {
+                "start_seconds": elapsed_seconds,
+                "last_violation_seconds": elapsed_seconds,
+            }
+        else:
+            current["last_violation_seconds"] = elapsed_seconds
+        return
+    if current is None:
+        return
+    if elapsed_seconds - current["last_violation_seconds"] <= gap_tolerance_seconds:
+        return
+    _complete_violation_interval(signal_name, active, completed)
+
+
+def _complete_violation_interval(
+    signal_name: str,
+    active: dict[str, dict[str, float]],
+    completed: dict[str, list[dict[str, object]]],
+) -> None:
+    current = active.pop(signal_name, None)
+    if current is None:
+        return
+    start = current["start_seconds"]
+    end = current["last_violation_seconds"]
+    completed.setdefault(signal_name, []).append(
+        {
+            "start_seconds": round(start, 3),
+            "end_seconds": round(end, 3),
+            "duration_seconds": round(max(0.0, end - start), 3),
+        }
+    )
+
+
+def _finish_violation_intervals(
+    active: dict[str, dict[str, float]],
+    completed: dict[str, list[dict[str, object]]],
+    elapsed_seconds: float,
+) -> None:
+    for signal_name, current in active.items():
+        current["last_violation_seconds"] = min(
+            elapsed_seconds, current["last_violation_seconds"]
+        )
+    for signal_name in tuple(active):
+        _complete_violation_interval(signal_name, active, completed)
+
+
 def _calibrate(config_path: Path | None, models_dir: Path, output_path: Path) -> int:
-    from observer.calibration_workflow import run_guided_calibration
+    from observer.calibration_workflow import CalibrationInputError, run_guided_calibration
 
     config = load_config(config_path)
     models = verify_model_directory(models_dir)
-    profile = run_guided_calibration(config, models, output_path)
+    try:
+        profile = run_guided_calibration(config, models, output_path)
+    except CalibrationInputError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "camera_setup_failed",
+                    "message": str(exc),
+                    "profile_preserved": output_path.exists(),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 2
     result = {
         "profile_path": str(output_path.resolve()),
         "profile_id": profile.profile_id,
@@ -347,6 +1039,7 @@ def _validate_live(
     output_root: Path,
     repetitions: int | None,
     save_error_evidence: bool,
+    save_trial_videos: bool,
 ) -> int:
     from observer.alignment import AlignmentCancelled, AlignmentTimeout
     from observer.live_validation import run_live_validation
@@ -375,6 +1068,7 @@ def _validate_live(
             output_root=output_root,
             repetitions_override=repetitions,
             save_error_evidence=save_error_evidence,
+            save_trial_videos=save_trial_videos,
         )
     except AlignmentCancelled as exc:
         print(json.dumps({"aligned": False, "reason": str(exc)}, indent=2))
@@ -509,6 +1203,31 @@ def build_parser() -> argparse.ArgumentParser:
     vision_parser.add_argument("--seconds", type=float, default=30.0)
     vision_parser.add_argument("--models-dir", type=Path, default=Path("models"))
     vision_parser.add_argument("--profile", type=Path)
+    vision_parser.add_argument(
+        "--evidence-dir",
+        type=Path,
+        help="opt in to at most three local violation frames per signal",
+    )
+    vision_parser.add_argument(
+        "--report",
+        type=Path,
+        help="write the complete JSON summary to this path",
+    )
+    vision_parser.add_argument(
+        "--debug-video",
+        type=Path,
+        help="explicitly opt in to a temporary local MP4 plus timestamp and signal trace",
+    )
+    vision_parser.add_argument(
+        "--guided-debug-cues",
+        action="store_true",
+        help="show the legacy five-minute timed action plan",
+    )
+    vision_parser.add_argument(
+        "--guided-debug-plan",
+        choices=tuple(GUIDED_DEBUG_PLANS),
+        help="show a named timed action plan without exposing model results",
+    )
     calibrate_parser = subparsers.add_parser(
         "calibrate", help="run guided posture and 17-point attention calibration"
     )
@@ -574,6 +1293,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="save_error_evidence",
         help="disable the approved one-error-frame validation policy",
     )
+    live_parser.add_argument(
+        "--debug-trial-videos",
+        action="store_true",
+        help="opt in to temporary videos of scored trial intervals only",
+    )
     event_parser = subparsers.add_parser(
         "validate-away-events",
         help="run continuous Stage C away alert, penalty, and recovery scenarios",
@@ -625,7 +1349,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "camera-smoke":
         return _camera_smoke(args.config, args.seconds)
     if args.command == "vision-smoke":
-        return _vision_smoke(args.config, args.models_dir, args.seconds, args.profile)
+        return _vision_smoke(
+            args.config,
+            args.models_dir,
+            args.seconds,
+            args.profile,
+            args.evidence_dir,
+            args.report,
+            args.debug_video,
+            args.guided_debug_cues,
+            args.guided_debug_plan,
+        )
     if args.command == "calibrate":
         return _calibrate(args.config, args.models_dir, args.output)
     if args.command == "align":
@@ -655,6 +1389,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output_root,
             args.repetitions,
             args.save_error_evidence,
+            args.debug_trial_videos,
         )
     if args.command == "validate-away-events":
         return _validate_away_events(

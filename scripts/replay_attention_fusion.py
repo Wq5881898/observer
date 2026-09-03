@@ -32,26 +32,38 @@ def main() -> int:
         .read_text(encoding="utf-8")
         .splitlines()
     ]
-    center_records = [
-        record
-        for record in records
-        if scenario_by_trial[str(record["trial_id"])] == "attention_center"
-        and {"head_yaw_proxy", "head_pitch_proxy"}.issubset(
-            record.get("attention_smoothed") or {}
+    manifest = json.loads((args.batch / "manifest.json").read_text(encoding="utf-8"))
+    saved_baseline = (manifest.get("alignment") or {}).get(
+        "attention_session_baseline"
+    ) or {}
+    if {"head_yaw_proxy", "head_pitch_proxy"}.issubset(saved_baseline):
+        baseline = AttentionSessionBaseline(
+            float(saved_baseline["head_yaw_proxy"]),
+            float(saved_baseline["head_pitch_proxy"]),
         )
-    ]
-    if not center_records:
-        raise RuntimeError("batch has no observable attention_center baseline")
-    baseline = AttentionSessionBaseline(
-        median(
-            record["attention_smoothed"]["head_yaw_proxy"]
-            for record in center_records
-        ),
-        median(
-            record["attention_smoothed"]["head_pitch_proxy"]
-            for record in center_records
-        ),
-    )
+    else:
+        center_records = [
+            record
+            for record in records
+            if scenario_by_trial[str(record["trial_id"])] == "attention_center"
+            and {"head_yaw_proxy", "head_pitch_proxy"}.issubset(
+                record.get("attention_smoothed") or {}
+            )
+        ]
+        if not center_records:
+            raise RuntimeError(
+                "batch has neither a saved session baseline nor observable center data"
+            )
+        baseline = AttentionSessionBaseline(
+            median(
+                record["attention_smoothed"]["head_yaw_proxy"]
+                for record in center_records
+            ),
+            median(
+                record["attention_smoothed"]["head_pitch_proxy"]
+                for record in center_records
+            ),
+        )
 
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     metric_values: dict[str, dict[str, list[float]]] = defaultdict(

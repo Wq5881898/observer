@@ -4,6 +4,8 @@
 日期：2026-08-30
 状态：实现交接完成；等待项目所有者参与执行
 
+正式收尾测试不再直接穷举本手册中的所有早期 tuning 场景。测试优先级、两个独立循环、盲测要求和停止规则见 `docs/phase-c-formal-test-plan.md`。
+
 ## 1. 这一步为什么必须有人参与
 
 自动化测试可以证明数据契约、数学计算、版本保护、隐私默认值和状态融合没有明显回归，但不能替代“本人真实看屏幕、倾斜、离座和手持手机”的人工真值。阶段 C 只有在真实 tuning、冻结后的全新 holdout 和 60 分钟正常使用长测完成后才能判断通过。
@@ -12,7 +14,9 @@
 
 ## 2. 测试前固定环境
 
-开始前保持以下条件不变：ThinkPad 内置主屏与内置摄像头、日常座椅高度、正常桌面光照、日常眼镜状态、同一 Windows 电源模式。打开摄像头隐私挡板，退出占用摄像头的软件，并让脸、双眼、双肩和至少一侧手腕进入画面。
+开始前保持以下条件不变：ThinkPad 内置主屏与内置摄像头、日常座椅高度、正常桌面光照、日常眼镜状态、同一 Windows 电源模式。打开摄像头隐私挡板，退出占用摄像头的软件，并让完整脸部和双眼进入画面。双肩和手腕不是日常运行的强制取景要求；它们不可见时，相应的完整上身姿态或手机持握子项会单独不可观测，但不得阻塞在席、注意力和 face-only 头部姿态。
+
+若摄像头无法打开，程序应明确提示设备可能被其他应用占用、被 Windows 隐私设置禁用或已断开。部分 Windows 驱动在被占用时仍允许打开设备句柄，却只返回黑色或无效帧；此时程序会保留“无可用图像”提示并等待确认，而不是黑屏后无理由退出。先关闭相机、会议软件、浏览器摄像头页面或其他监控进程，再重新运行；不要在错误窗口上继续校准。
 
 在项目目录执行：
 
@@ -90,11 +94,13 @@
 
 完整套件包含正常工作、短暂手机、恢复、持续手机、恢复、非手机物体。若安全反例已通过，只补正例可增加 `--suite positive`。等待页和 3 秒准备页会实时显示 `phone_held`；正例应先调整到 violation 再开始。当前默认手机触发 10 秒、首次扣 5 分、可观测恢复 2 秒、不可观测安全宽限 3 秒。短暂正例要求至少连续 3 秒形成候选且不得报警；持续正例必须至少 80% violation，在 10 秒附近只报警和扣分一次；放下后可以按 2 秒 recovered 或 3 秒 observation_lost 结束。事件批次不保存图像。
 
-窗口显示 TARGET 和 CURRENT；注意力方向场景还显示相对于本次 3 秒中立基线的 `yaw`、`pitch` 及虹膜预测 `x/y`。左、右、低头必须分别匹配对应方向并连续保持 0.6 秒，任意其他方向的 attention violation 不得冒充目标。当前水平头姿门槛为 ±0.22，虹膜单独触发左右目标时保留屏外 8% 安全余量。普通低头必须同时满足相对 `pitch >= 0.07` 和虹膜 `y > 1.0`；只有明显低头 `pitch >= 0.14` 才允许头姿单证据触发。水平方向优先级高于垂直方向：`abs(yaw) >= 0.22` 时核心逻辑会完全禁用低头证据，即使虹膜 y 或 pitch 同时异常也不得归为向下。这些都是 tuning 候选，冻结 holdout 后才能确认。看到绿色勾再按空格，经过 1 秒准备后开始记录；即使没有绿色勾也允许按空格，失败尝试不会被静默筛掉。记录期间会显示目标保持或丢失，每个场景结束后重新等待空格。绿色勾只能帮助引导动作，不能作为 holdout 筛选条件。中途 `Esc` 会取消准备或把正在执行的 trial 标为 invalid 后退出；全程不保存视频，`--no-error-evidence` 时也不保存图片。
+窗口显示 TARGET 和 CURRENT；注意力方向场景还显示相对于本次 3 秒中立基线的 `yaw`、`pitch` 及虹膜预测 `x/y`。左、右、低头必须分别匹配对应方向并连续保持 0.6 秒，任意其他方向的 attention violation 不得冒充目标。当前水平头姿门槛为 ±0.22，虹膜单独触发左右目标时保留屏外 8% 安全余量。普通低头必须同时满足相对 `pitch >= 0.07` 和虹膜 `y > 1.0`；只有明显低头 `pitch >= 0.14` 才允许头姿单证据触发。水平方向优先级高于垂直方向：`abs(yaw) >= 0.22` 时核心逻辑会完全禁用低头证据，即使虹膜 y 或 pitch 同时异常也不得归为向下。这些都是 tuning 候选，冻结 holdout 后才能确认。看到绿色勾再按空格，经过 1 秒准备后开始记录；即使没有绿色勾也允许按空格，失败尝试不会被静默筛掉。记录期间会显示目标保持或丢失，每个场景结束后重新等待空格。绿色勾只能帮助 tuning 中理解规则，不能要求测试者扭曲自然动作去迎合，也不能作为 holdout 筛选条件。自然动作与绿色提示冲突时立即按 `Esc`：该 trial 标为 invalid 并保留失败原因，人工真值优先于自动报告；不要在同一 trial 中改做另一个动作来“完成测试”。中途 `Esc` 会取消准备或把正在执行的 trial 标为 invalid 后退出；全程不保存视频，`--no-error-evidence` 时也不保存图片。
 
 低头参数每次修改后不能只重复真正低头正例，必须在同一冻结版本运行三个专项场景：真正看桌面、明显向任一侧看但保持视线水平、轻微低头但眼睛仍看屏幕。真正低头应持续变绿；两个对照都必须持续不变绿。2026-08-31 的实践证明，仅有低头正例 90/90 会遗漏两种可持续误判，因此 positive-only 批次不得再作为低头特异性完成证据。
 
-姿态批次默认只有正常、明显前倾/含胸和明显侧倾三个实际场景，每项 6 秒、1 次。对齐页分行显示 FACE POSITION、FACE SIZE、FACE CONTEXT、POSTURE 和 OVERALL；短于 0.5 秒的波动暂停进度，持续异常才清零。当前脸尺度复位实用下限为 0.005，在默认 5z 下约允许相对 0.30 基线 ±8.3%；横纵位置容差未放宽。姿态使用 7 帧、至少 5 帧的中位数以抑制关键点抖动。
+历史 `attention_desk_control_chin` 要求测试者同时控制头部和眼睛，已经诱发“头部过度下压、眼睛上翻看屏幕”的阈值迎合动作；它只保留用于诊断回放，不得进入默认 tuning 或 holdout。正式安全反例改用自然注视屏幕下方目标，正式正例使用自然看桌面；测试者只按日常方式完成动作，不根据数值或颜色寻找算法边界。自然边界复测和 holdout 应关闭目标是否匹配的绿色/黄色结果反馈，只显示采集状态。若头姿和虹膜注视明显冲突，预期产品语义是注意力 `unknown`：不扣注意力分，也不计为合规；姿态继续按独立规则和持续时间处理。
+
+姿态批次需要分别报告 `head_posture`（face-only）与 `upper_body_posture`（需要肩部/躯干）。默认场景仍包括正常、明显前倾/含胸和明显侧倾，但只有当前可观测子项参与判定：肩部不足不算违规，也不得使 face-only 结果 unknown。对齐页分行显示 FACE POSITION、FACE SIZE、FACE CONTEXT、HEAD POSTURE、UPPER BODY POSTURE 和 OVERALL；短于 0.5 秒的波动暂停进度，持续异常才清零。当前脸尺度复位实用下限为 0.005，在默认 5z 下约允许相对 0.30 基线 ±8.3%；横纵位置容差未放宽。姿态使用 7 帧、至少 5 帧的中位数以抑制关键点抖动。该分层语义在实现和复测完成前属于已确认需求，不得提前记为通过。
 
 每个批次包含：
 
@@ -149,6 +155,62 @@ trial 分类通过后，必须让同一个规则引擎跨场景连续运行，�
 ```powershell
 .\.venv\Scripts\python.exe -m observer vision-smoke --models-dir models --profile data/calibration/default.json --seconds 3600
 ```
+
+需要对自然监控中的 violation 进行人工复核时，必须显式启用有限证据并同时保存完整报告，例如：
+
+```powershell
+.\.venv\Scripts\python.exe -m observer vision-smoke --models-dir models --profile data/calibration/default.json --seconds 300 --evidence-dir data/natural/<run-id>/evidence --report data/natural/<run-id>/report.json
+```
+
+只要传入 `--profile`，正式计时前必须先显示 3 秒 `SESSION SETUP - NO RECORDING`：测试者保持自然工作距离、完整脸和双眼可见并看屏幕中心。该步骤只建立本次摄像头会话的中立 yaw/pitch 基线，不要求回到历史校准脸尺度、不要求肩膀可见，也不计入监控时长或调试录像。报告的 `session_attention_setup` 必须包含两项基线和有效观测数；逐帧 attention 指标必须包含 `attention_head_yaw_delta` 与 `attention_head_pitch_delta`。缺少这些字段的自然注意力批次按退化运行处理，不得进入验收指标。
+
+该模式不录视频、不保存合规帧，只为离席、手机、注意力、姿态和人体工学 violation 各保存最多 3 张常规 JPEG，同一信号相邻常规截图至少 30 秒；如果连续 violation 达到该信号的产品触发时间，再额外保留 1 张 `sustained_threshold` 证据。`report.json` 的 `evidence.records` 给出每张图的绝对路径、发生时刻、取证类型、派生指标、SHA-256 和到期时间。先由测试者结合当时真实动作审核图像，再决定是否调整阈值；没有图像的历史统计不能单独作为调参依据。
+
+当有限关键帧无法分析“算法没有检出的动作”时，可由项目所有者逐轮明确授权 `--debug-video <new-path.mp4>`。该选项临时保存本轮完整本地 MP4、逐帧真实时间索引和 JSONL 信号/派生量轨迹，包括原始与跟踪后的手机候选；默认关闭，不得沿用为日常监控配置。文件标记为 review-then-delete，建议 24 小时内完成复核；分析完成后必须列出精确文件并经项目所有者确认再删除。调试录像的 CPU、磁盘和文件大小单独记录，不得混入默认无录像资源承诺。
+
+需要精确动作时长时同时使用 `--guided-debug-cues`。窗口只显示明显的 `STEP n/7`、短动作说明、剩余秒数和原始摄像头取景，不显示 compliant/violation/unknown 或任何阈值反馈；阶段切换发出一次系统提示音。非手机阶段必须明确显示 `NO PHONE`，避免动作跨窗口污染；逐帧 trace 同时记录 `cue_id` 和剩余时间，供录像与算法输出客观对齐。固定 300 秒流程为：0～180 秒自然专注，180～205 秒近距离看屏幕下缘，205～220 秒恢复，220～232 秒明确看出屏幕左侧，232～245 秒恢复，245～260 秒手机清晰入镜自然使用，260～300 秒恢复自然专注。测试者只执行当前窗口动作；如果动作提前、延后或跨越其他窗口，相应专项必须标为无效，不得用后段正确动作覆盖前段错误输入。不得用主观计数替代该时间真值，也不得根据模型结果调整动作。
+
+注意力会话基线修复使用一分钟专项 `--guided-debug-plan attention-minute`，不运行五分钟流程：0～10 秒正常看屏幕中心；10～25 秒明确看向屏幕外左下方；25～35 秒恢复；35～50 秒自然靠近但只看屏幕内左下区域；50～60 秒恢复。第一段是持续离屏正例，第二段是近距离屏内反例；两项必须在同一轮同时成立，不能用简单降低阈值换取正例召回。该一分钟之前的 3 秒会话设置不计入 60 秒。
+
+早期定时 pilot 使用 `--guided-debug-plan attention-boundary`，计划总长固定为 151 秒。它证明了连续脚本和逐用例报告链路可工作，但固定 3 秒准备可能早于测试者真正就绪，所以该现有计划只保留为 pilot/录像诊断，不能直接作为正式连续 holdout。
+
+下一轮 P0-A 先建立交互基线。启动前逐项向测试者说明动作、参照点、距离、期望、计分时长和通过标准；标准有疑问时先不测试。`validate-live` 显示简短 `STANDARD`、黄色 `TARGET NOT READY` 或绿色 `TARGET READY`；测试者以真实动作为准，确认后按空格或回车，经过 1 秒稳定期才记录。ESC 表示标准/动作有疑问并取消批次。等待和稳定期不计分、不进入 trial，也不写入调试小视频。近距离需要脸尺度至少比校准尺度大约 `0.10`；远距离目标为校准尺度上下 `0.03`。
+
+开测对齐阶段的绿色人脸位置框水平居中于 `0.500`，容差为画面宽度的 ±5%。历史档案中的脸部水平位置只表示当时坐在哪里，不能迫使后续测试者复现一个偏移且仅数像素宽的点；启动门同样不要求自然工作距离回到历史脸尺度，而是保存本次会话自然脸尺度，供后续“再靠近”用例作相对参照。校准远距离用例仍明确回到历史尺度。完整脸、双眼和垂直取景继续检查。该门禁修复不更改 17 点注视模型。
+
+```powershell
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals attention_away --scenarios attention_boundary_a01_center,attention_boundary_a02_outside_left,attention_boundary_a03_recovery,attention_boundary_a04_outside_right,attention_boundary_a05_recovery,attention_boundary_a06_near_left,attention_boundary_a07_near_right,attention_boundary_a08_far_center,attention_boundary_a09_far_left,attention_boundary_a10_far_right,attention_boundary_a11_final --output-root data/formal/attention-boundary-interactive --debug-trial-videos
+```
+
+该交互批次用于 tuning、确认标准和建立边界基线，不因绿色筛选而宣称 holdout 通过。正确自然的动作始终不变绿时仍可按实际真值采样，结果记为边界/漏检候选，不得迎合。每个错误 trial 保存证据帧，全部计分段保存派生数值；显式的 `--debug-trial-videos` 只录制确认并完成 1 秒稳定准备后的正式计分段，生成的本地小视频仍按 review-then-delete 处理。
+
+当需要复现“头向一侧但眼睛补偿看回中心”以及近距离左右点混淆时，使用以下 P0-A-D 专项。绿色徽标为 `CAPTURE READY`，只表示画面/脸/眼睛/距离可采样；模型意见单列为只读诊断，不控制绿色。按键后准备和计分阶段隐藏模型结果。
+
+```powershell
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals attention_away --scenarios attention_compensation_d01_center,attention_compensation_d02_head_left_eyes_center,attention_compensation_d03_outside_left,attention_compensation_d04_recovery,attention_compensation_d05_head_right_eyes_center,attention_compensation_d06_outside_right,attention_compensation_d07_recovery,attention_compensation_d08_near_center,attention_compensation_d09_near_left,attention_compensation_d10_near_right,attention_compensation_d11_final --output-root data/formal/attention-compensation-interactive --debug-trial-videos
+```
+
+执行前固定五个视线点：屏幕中心；从显示区域边缘向内约 2～3 厘米的左下、右下点；位于左右边框外约 10 厘米、并与显示区域下方四分之一高度对齐的左下、右下点。循环 1 和循环 2 不移动参照点、摄像头、电脑或座椅，并分别重启程序以获得独立会话基线。
+
+距离分为三档：本轮会话设置时的自然舒适距离；比自然距离明显更近但完整脸和双眼仍在画面中的近距离；以及当前校准档案对应的远距离，目标脸尺度约为 `0.270`，不要求退到眼睛无法检测。当前 17 点及 8 个独立验证点无需重做，它们仍是同一摄像头/屏幕环境下的坐标锚点；P0-A 只用中心和左右下边界代表点检查距离泛化。若远距离或近距离代表点失败，才建立该距离的专项网格，不预先重复三套 17 点校准。
+
+交互基线通过、标准争议关闭并冻结算法后，才生成正式连续脚本。整组启动前一次性确认动作顺序和停止条件，运行中不显示黄/绿、`CURRENT` 或实时得分，不要求再次按键；程序独立跑完后统一分析。动作切换窗口预先写入脚本，转换帧不计入稳定段。两个 5 分钟自然循环也采用同样的“开始前确认一次、中间不干扰”原则。
+
+以下命令仅是旧 pilot 的复现命令，不得原样用于新的正式连续基线：
+
+```powershell
+.\.venv\Scripts\python.exe -m observer vision-smoke --models-dir models --profile data/calibration/default.json --guided-debug-plan attention-boundary --debug-video data/formal/attention-boundary-cycle-1/session.mp4 --evidence-dir data/formal/attention-boundary-cycle-1/evidence --report data/formal/attention-boundary-cycle-1/report.json
+```
+
+循环 2 必须在循环 1 完全退出后使用新目录启动：
+
+```powershell
+.\.venv\Scripts\python.exe -m observer vision-smoke --models-dir models --profile data/calibration/default.json --guided-debug-plan attention-boundary --debug-video data/formal/attention-boundary-cycle-2/session.mp4 --evidence-dir data/formal/attention-boundary-cycle-2/evidence --report data/formal/attention-boundary-cycle-2/report.json
+```
+
+两个旧命令不会自动连续执行。正式连续脚本生成后也必须采用两个独立摄像头会话，轮间只确认设备释放和输入有效，不得修改参数；每一轮内部不中断、不确认。
+
+姿态判定不得把同一次距离变化复制成多个独立证据。绝对脸部位置、脸尺度和肩宽不参与违规投票；`head_offset_y` 与 `face_to_shoulder_scale` 也不得自行组合成违规。有效组合必须包含真正的角度、肩线或躯干佐证：前倾为头部俯仰加垂直/比例证据，侧倾为歪头加肩线/垂直证据，上身侧倾为肩线加垂直证据；face-only 时要求俯仰与歪头同时明显异常。报告中的 `reason` 应明确给出采用的证据组合。
 
 记录输出中的 CPU 平均/P95、内存峰值/增长、各模型延迟、摄像头错误和最终信号。正式误报率以真实验证批次和人工复核为准，不能只看最后一帧。
 

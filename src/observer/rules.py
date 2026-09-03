@@ -262,6 +262,16 @@ def default_rule_configs() -> tuple[RuleConfig, ...]:
             maximum_penalty_points=10.0,
         ),
         RuleConfig(
+            "ergonomic_risk",
+            "ergonomic_risk",
+            trigger_after_seconds=30.0,
+            recovery_after_seconds=5.0,
+            alert_cooldown_seconds=300.0,
+            initial_penalty_points=0.0,
+            repeat_penalty_points=0.0,
+            maximum_penalty_points=0.0,
+        ),
+        RuleConfig(
             "phone_held",
             "phone_held",
             trigger_after_seconds=10.0,

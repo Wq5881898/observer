@@ -49,6 +49,16 @@
       "maximum_penalty_points": 10.0
     },
     {
+      "rule_id": "ergonomic_risk",
+      "signal_name": "ergonomic_risk",
+      "trigger_after_seconds": 30.0,
+      "recovery_after_seconds": 5.0,
+      "alert_cooldown_seconds": 300.0,
+      "initial_penalty_points": 0.0,
+      "repeat_penalty_points": 0.0,
+      "maximum_penalty_points": 0.0
+    },
+    {
       "rule_id": "phone_held",
       "signal_name": "phone_held",
       "trigger_after_seconds": 10.0,
