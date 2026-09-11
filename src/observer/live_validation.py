@@ -24,6 +24,7 @@ from observer.calibration_workflow import current_environment
 from observer.camera import CameraWorker
 from observer.config import AppConfig
 from observer.models import ModelFiles, sha256_file
+from observer.object_detection import YoloOnnxBackend
 from observer.observations import SignalState, SignalValue
 from observer.resources import ResourceSampler, summarize_resources
 from observer.scoring import RuleEngine
@@ -52,6 +53,10 @@ class Scenario:
 
 
 SCENARIOS: tuple[Scenario, ...] = (
+    Scenario('presence_yolo_01_seated', 'away', SignalState.COMPLIANT, 'Sit naturally in view', duration_seconds=8.0, repetitions=1),
+    Scenario('presence_yolo_02_face_hidden', 'away', SignalState.COMPLIANT, 'Hide face with hands; keep upper body visible; do not cover camera', duration_seconds=8.0, repetitions=1),
+    Scenario('presence_yolo_03_empty', 'away', SignalState.VIOLATION, 'Leave camera view completely; keep lens uncovered', duration_seconds=8.0, repetitions=1),
+    Scenario('presence_yolo_04_return', 'away', SignalState.COMPLIANT, 'Return and sit naturally in view', duration_seconds=8.0, repetitions=1),
     Scenario("present_normal", "away", SignalState.COMPLIANT, "Sit normally in view"),
     Scenario("away_leave_seat", "away", SignalState.VIOLATION, "Leave the camera view"),
     Scenario("away_partial_face_pose", "away", SignalState.COMPLIANT, "Keep upper body visible; partially hide face", repetitions=3),
@@ -99,16 +104,50 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("attention_compensation_d09_near_left", "attention_away", SignalState.COMPLIANT, "D09: stay close; look at INSIDE left-low dot", target=(0.08, 0.92), duration_seconds=8.0, repetitions=1, distance_mode="near"),
     Scenario("attention_compensation_d10_near_right", "attention_away", SignalState.COMPLIANT, "D10: stay close; look at INSIDE right-low dot", target=(0.92, 0.92), duration_seconds=8.0, repetitions=1, distance_mode="near"),
     Scenario("attention_compensation_d11_final", "attention_away", SignalState.COMPLIANT, "D11: return to natural distance and center dot", target=(0.50, 0.50), duration_seconds=8.0, repetitions=1),
-    Scenario("phone_baseline_b01_natural_no_phone", "phone_held", SignalState.COMPLIANT, "B01: work naturally; no phone in your hands", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
-    Scenario("phone_baseline_b02_desktop_phone", "phone_held", SignalState.COMPLIANT, "B02: phone visible on desk; hands do not hold it", duration_seconds=12.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b01_natural_no_phone", "phone_held", SignalState.COMPLIANT, "B01: work naturally; no phone visible", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b02_desktop_phone", "phone_held", SignalState.VIOLATION, "B02: phone visible ANYWHERE in camera view", duration_seconds=12.0, repetitions=1),
     Scenario("phone_baseline_b03_non_phone_object", "phone_held", SignalState.COMPLIANT, "B03: hold a remote or calculator; it is not a phone", duration_seconds=12.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
     Scenario("phone_baseline_b04_one_hand_phone", "phone_held", SignalState.VIOLATION, "B04: hold and use the phone naturally with ONE hand", duration_seconds=12.0, repetitions=1),
-    Scenario("phone_baseline_b05_recovery", "phone_held", SignalState.COMPLIANT, "B05: put the phone down; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
-    Scenario("phone_baseline_b06_two_hands_low", "phone_held", SignalState.VIOLATION, "B06: use phone with BOTH hands; low position is allowed", duration_seconds=12.0, repetitions=1, accepted_states=(SignalState.VIOLATION, SignalState.UNKNOWN)),
-    Scenario("phone_baseline_b07_recovery", "phone_held", SignalState.COMPLIANT, "B07: put the phone down; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
-    Scenario("phone_baseline_b08_phone_out_of_frame", "phone_held", SignalState.UNKNOWN, "B08 PHONE: hold phone outside camera frame; keep looking at it", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_baseline_b05_recovery", "phone_held", SignalState.COMPLIANT, "B05: put the phone out of view; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b06_two_hands_low", "phone_held", SignalState.VIOLATION, "B06: use phone with BOTH hands; low position is allowed", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_baseline_b07_recovery", "phone_held", SignalState.COMPLIANT, "B07: put the phone out of view; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b08_phone_out_of_frame", "phone_held", SignalState.COMPLIANT, "B08 PHONE: hold phone outside camera frame; no phone is visible", duration_seconds=12.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
     Scenario("attention_baseline_b08_look_off_screen", "attention_away", SignalState.VIOLATION, "B08 ATTENTION: repeat hold; keep eyes on the phone off screen", duration_seconds=12.0, repetitions=1),
-    Scenario("phone_baseline_b09_final", "phone_held", SignalState.COMPLIANT, "B09: final natural work; no phone in your hands", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b09_final", "phone_held", SignalState.COMPLIANT, "B09: final natural work; no phone visible", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b10_one_hand_low", "phone_held", SignalState.VIOLATION, "B10: hold and use the phone with ONE hand in a LOW position; keep part of it visible", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_baseline_b10_recovery", "phone_held", SignalState.COMPLIANT, "B10 RECOVERY: put the phone out of view; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b11_two_hands_normal", "phone_held", SignalState.VIOLATION, "B11: hold and use the phone with BOTH hands at a NORMAL position", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_baseline_b11_recovery", "phone_held", SignalState.COMPLIANT, "B11 RECOVERY: put the phone out of view; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b12_one_hand_edge", "phone_held", SignalState.VIOLATION, "B12: hold the phone with ONE hand VERY LOW; keep only a small edge visible", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_baseline_b12_recovery", "phone_held", SignalState.COMPLIANT, "B12 RECOVERY: put the phone out of view; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_baseline_b13_two_hands_edge", "phone_held", SignalState.VIOLATION, "B13: hold the phone with BOTH hands VERY LOW; keep only a small edge visible", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_baseline_b13_recovery", "phone_held", SignalState.COMPLIANT, "B13 RECOVERY: put the phone out of view; work and look at screen", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    # Independent phone-edge diagnostics. These are deliberately separate from
+    # the B01-B13 baselines so parameter experiments cannot silently change the
+    # original acceptance set or its historical evidence.
+    Scenario("phone_edge_e01_bottom_center", "phone_held", SignalState.VIOLATION, "E01: keep the face fixed; hold the phone at the bottom-center edge with only a small strip visible", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_edge_e01_bottom_center_recovery", "phone_held", SignalState.COMPLIANT, "E01 RECOVERY: remove the phone completely from view; keep the face fixed", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_edge_e02_bottom_left", "phone_held", SignalState.VIOLATION, "E02: keep the face fixed; hold the phone at the bottom-left edge with the same small strip visible as E01", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_edge_e02_bottom_left_recovery", "phone_held", SignalState.COMPLIANT, "E02 RECOVERY: remove the phone completely from view; keep the face fixed", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_edge_e03_bottom_right", "phone_held", SignalState.VIOLATION, "E03: keep the face fixed; hold the phone at the bottom-right edge with the same small strip visible as E01", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_edge_e03_bottom_right_recovery", "phone_held", SignalState.COMPLIANT, "E03 RECOVERY: remove the phone completely from view; keep the face fixed", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_edge_e04_top_edge", "phone_held", SignalState.VIOLATION, "E04: keep the face fixed; hold the phone at the top screen edge with only a small strip visible", duration_seconds=12.0, repetitions=1),
+    Scenario("phone_edge_e04_top_edge_recovery", "phone_held", SignalState.COMPLIANT, "E04 RECOVERY: remove the phone completely from view; keep the face fixed", duration_seconds=8.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    # Paired phone/power-bank contrast collection. Each negative is recorded
+    # before its matching phone positive so phone retention cannot contaminate
+    # the start of the negative trial. Keep both objects at the same position,
+    # orientation and visible fraction; this tests object identity rather than
+    # allowing the detector to learn the background or location.
+    Scenario("phone_contrast_f00_clear", "phone_held", SignalState.COMPLIANT, "F00: empty hands; keep phone and power bank fully out of view", duration_seconds=5.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_contrast_f01_powerbank_center", "phone_held", SignalState.COMPLIANT, "F01: hold the POWER BANK at center; show at least one third; use one hand", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_contrast_f02_phone_center", "phone_held", SignalState.VIOLATION, "F02: replace it with the PHONE at the SAME center position, angle and visible fraction", duration_seconds=10.0, repetitions=1),
+    Scenario("phone_contrast_f03_clear", "phone_held", SignalState.COMPLIANT, "F03: remove both objects completely; keep face and body position fixed", duration_seconds=5.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_contrast_f04_powerbank_left", "phone_held", SignalState.COMPLIANT, "F04: hold the POWER BANK at lower-left; show at least one third; use one hand", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_contrast_f05_phone_left", "phone_held", SignalState.VIOLATION, "F05: replace it with the PHONE at the SAME lower-left position, angle and visible fraction", duration_seconds=10.0, repetitions=1),
+    Scenario("phone_contrast_f06_clear", "phone_held", SignalState.COMPLIANT, "F06: remove both objects completely; keep face and body position fixed", duration_seconds=5.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_contrast_f07_powerbank_right", "phone_held", SignalState.COMPLIANT, "F07: hold the POWER BANK at lower-right; show at least one third; use one hand", duration_seconds=10.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
+    Scenario("phone_contrast_f08_phone_right", "phone_held", SignalState.VIOLATION, "F08: replace it with the PHONE at the SAME lower-right position, angle and visible fraction", duration_seconds=10.0, repetitions=1),
+    Scenario("phone_contrast_f09_final_clear", "phone_held", SignalState.COMPLIANT, "F09: final empty-hands recovery; remove both objects completely", duration_seconds=5.0, repetitions=1, accepted_states=(SignalState.COMPLIANT, SignalState.UNKNOWN)),
     Scenario("posture_ergonomics_c01_natural", "posture_deviation", SignalState.COMPLIANT, "C01: sit in your natural comfortable posture", duration_seconds=15.0, repetitions=1),
     Scenario("posture_ergonomics_c02_near_natural", "posture_deviation", SignalState.COMPLIANT, "C02: move closer naturally; do NOT deliberately slouch", duration_seconds=15.0, repetitions=1),
     Scenario("posture_ergonomics_c03_forward_slouch", "posture_deviation", SignalState.VIOLATION, "C03: lean/slouch clearly forward; stay safe and comfortable", duration_seconds=12.0, repetitions=1),
@@ -118,6 +157,43 @@ SCENARIOS: tuple[Scenario, ...] = (
     Scenario("attention_ergonomics_c06_attention", "attention_away", SignalState.COMPLIANT, "C06 ATTENTION: repeat hold; keep eyes on screen center", target=(0.50, 0.50), duration_seconds=12.0, repetitions=1),
     Scenario("attention_ergonomics_c07_small_chin", "attention_away", SignalState.COMPLIANT, "C07: lower chin slightly; keep eyes on screen center", target=(0.50, 0.50), duration_seconds=12.0, repetitions=1),
     Scenario("posture_ergonomics_c08_final", "posture_deviation", SignalState.COMPLIANT, "C08: return to your natural comfortable posture", duration_seconds=10.0, repetitions=1),
+)
+
+
+# Parameter profiles for the independent phone-edge diagnostic matrix. The
+# production baseline is included only as a control; none of these profiles
+# changes the defaults used by the existing B01-B13 scenarios.
+PHONE_EDGE_PARAMETER_PROFILES: tuple[dict[str, float | str], ...] = (
+    {
+        "profile_id": "P0_control",
+        "phone_score_threshold": 0.25,
+        "phone_retain_seconds": 1.5,
+        "phone_center_distance": 0.18,
+    },
+    {
+        "profile_id": "P1_medium_recall",
+        "phone_score_threshold": 0.15,
+        "phone_retain_seconds": 1.5,
+        "phone_center_distance": 0.18,
+    },
+    {
+        "profile_id": "P2_low_threshold_continuity",
+        "phone_score_threshold": 0.10,
+        "phone_retain_seconds": 2.2,
+        "phone_center_distance": 0.18,
+    },
+    {
+        "profile_id": "P3_low_threshold_wide_tracking",
+        "phone_score_threshold": 0.10,
+        "phone_retain_seconds": 2.2,
+        "phone_center_distance": 0.30,
+    },
+    {
+        "profile_id": "P4_medium_threshold_wide_tracking",
+        "phone_score_threshold": 0.15,
+        "phone_retain_seconds": 2.2,
+        "phone_center_distance": 0.30,
+    },
 )
 
 
@@ -180,25 +256,32 @@ def scenario_accepted_states(scenario: Scenario) -> tuple[SignalState, ...]:
 
 def scenario_acceptance_summary(scenario: Scenario) -> str:
     """Return the short, user-visible baseline criterion for one scenario."""
-    if scenario.scenario_id.startswith("phone_baseline_b0"):
+    if scenario.scenario_id.startswith("phone_contrast_"):
+        if "_phone_" in scenario.scenario_id:
+            return "DIAGNOSTIC: violation >=90%; continuous >=8s"
+        return "DIAGNOSTIC: violation <=10%; violation run <2s"
+    if scenario.scenario_id.startswith("phone_edge_"):
+        if scenario.scenario_id.endswith("_recovery"):
+            return "DIAGNOSTIC: violation <=10%; violation run <2.5s"
+        return "DIAGNOSTIC: violation >=90%; continuous >=10s"
+    if scenario.scenario_id.startswith("phone_baseline_"):
         if scenario.scenario_id in {
             "phone_baseline_b01_natural_no_phone",
-            "phone_baseline_b02_desktop_phone",
             "phone_baseline_b03_non_phone_object",
             "phone_baseline_b09_final",
+            "phone_baseline_b08_phone_out_of_frame",
         }:
-            return "STANDARD: no hand-held violation; error run <2s"
+            return "STANDARD: no visible-phone violation; error run <2s"
         if scenario.scenario_id in {
             "phone_baseline_b05_recovery",
             "phone_baseline_b07_recovery",
+            "phone_baseline_b10_recovery",
+            "phone_baseline_b11_recovery",
+            "phone_baseline_b12_recovery",
+            "phone_baseline_b13_recovery",
         }:
             return "STANDARD: violation <=10%; violation run <2.5s"
-        if scenario.scenario_id == "phone_baseline_b04_one_hand_phone":
-            return "STANDARD: violation >=90%; continuous >=10s"
-        if scenario.scenario_id == "phone_baseline_b06_two_hands_low":
-            return "STANDARD: observable => violation >=90%; else unknown"
-        if scenario.scenario_id == "phone_baseline_b08_phone_out_of_frame":
-            return "STANDARD: unknown >=90%"
+        return "STANDARD: violation >=90%; continuous >=10s"
     if scenario.scenario_id.startswith("posture_ergonomics_c"):
         if scenario.scenario_id in {
             "posture_ergonomics_c03_forward_slouch",
@@ -239,23 +322,40 @@ def scenario_record_passes(scenario: Scenario, record: TrialRecord) -> bool:
     if not record.valid:
         return False
     metrics = record.metrics
-    if scenario.scenario_id.startswith("phone_baseline_b0"):
+    if scenario.scenario_id.startswith("phone_contrast_"):
         violation_fraction = metrics.get("violation_fraction", 1.0)
-        unknown_fraction = metrics.get("unknown_fraction", 1.0)
         violation_run = metrics.get("longest_violation_run_seconds", 999.0)
-        if scenario.scenario_id == "phone_baseline_b04_one_hand_phone":
-            return violation_fraction >= 0.90 and violation_run >= 10.0
-        if scenario.scenario_id == "phone_baseline_b06_two_hands_low":
-            if unknown_fraction <= 0.10:
-                return violation_fraction >= 0.90
-            return unknown_fraction >= 0.90
-        if scenario.scenario_id == "phone_baseline_b08_phone_out_of_frame":
-            return unknown_fraction >= 0.90
+        if "_phone_" in scenario.scenario_id:
+            return violation_fraction >= 0.90 and violation_run >= 8.0
+        return violation_fraction <= 0.10 and violation_run < 2.0
+    if scenario.scenario_id.startswith("phone_edge_"):
+        violation_fraction = metrics.get("violation_fraction", 1.0)
+        violation_run = metrics.get("longest_violation_run_seconds", 999.0)
+        if scenario.scenario_id.endswith("_recovery"):
+            return violation_fraction <= 0.10 and violation_run < 2.5
+        return violation_fraction >= 0.90 and violation_run >= 10.0
+    if scenario.scenario_id.startswith("phone_baseline_"):
+        violation_fraction = metrics.get("violation_fraction", 1.0)
+        violation_run = metrics.get("longest_violation_run_seconds", 999.0)
         if scenario.scenario_id in {
             "phone_baseline_b05_recovery",
             "phone_baseline_b07_recovery",
+            "phone_baseline_b10_recovery",
+            "phone_baseline_b11_recovery",
+            "phone_baseline_b12_recovery",
+            "phone_baseline_b13_recovery",
         }:
             return violation_fraction <= 0.10 and violation_run < 2.5
+        if scenario.scenario_id in {
+            "phone_baseline_b02_desktop_phone",
+            "phone_baseline_b06_two_hands_low",
+            "phone_baseline_b04_one_hand_phone",
+            "phone_baseline_b10_one_hand_low",
+            "phone_baseline_b11_two_hands_normal",
+            "phone_baseline_b12_one_hand_edge",
+            "phone_baseline_b13_two_hands_edge",
+        }:
+            return violation_fraction >= 0.90 and violation_run >= 10.0
         return violation_fraction <= 0.10 and violation_run < 2.0
     if scenario.scenario_id.startswith("posture_ergonomics_c"):
         compliant_fraction = metrics.get("compliant_fraction", 0.0)
@@ -368,6 +468,32 @@ _TUNING_DIAGNOSTIC_ONLY_SCENARIOS = {
     "attention_compensation_d09_near_left",
     "attention_compensation_d10_near_right",
     "attention_compensation_d11_final",
+    "phone_baseline_b10_one_hand_low",
+    "phone_baseline_b10_recovery",
+    "phone_baseline_b11_two_hands_normal",
+    "phone_baseline_b11_recovery",
+    "phone_baseline_b12_one_hand_edge",
+    "phone_baseline_b12_recovery",
+    "phone_baseline_b13_two_hands_edge",
+    "phone_baseline_b13_recovery",
+    "phone_edge_e01_bottom_center",
+    "phone_edge_e01_bottom_center_recovery",
+    "phone_edge_e02_bottom_left",
+    "phone_edge_e02_bottom_left_recovery",
+    "phone_edge_e03_bottom_right",
+    "phone_edge_e03_bottom_right_recovery",
+    "phone_edge_e04_top_edge",
+    "phone_edge_e04_top_edge_recovery",
+    "phone_contrast_f00_clear",
+    "phone_contrast_f01_powerbank_center",
+    "phone_contrast_f02_phone_center",
+    "phone_contrast_f03_clear",
+    "phone_contrast_f04_powerbank_left",
+    "phone_contrast_f05_phone_left",
+    "phone_contrast_f06_clear",
+    "phone_contrast_f07_powerbank_right",
+    "phone_contrast_f08_phone_right",
+    "phone_contrast_f09_final_clear",
 }
 
 
@@ -453,22 +579,8 @@ def attention_direction_matches(scenario: Scenario, signal: SignalValue) -> bool
 
 
 def scenario_validation_signal(scenario: Scenario, signal: SignalValue) -> SignalValue:
-    """Convert the binary production signal into a direction-specific test signal."""
-
-    if scenario.scenario_id not in _DIRECTIONAL_ATTENTION_SCENARIOS:
-        return signal
-    if signal.state is SignalState.UNKNOWN:
-        return signal
-    if attention_direction_matches(scenario, signal):
-        return SignalValue.violation(signal.confidence, **signal.metrics)
-    if (
-        scenario.scenario_id in _ATTENTION_ACTION_GATED_SCENARIOS
-        and not attention_control_action_matches(scenario, signal)
-    ):
-        return SignalValue.unknown(
-            "requested control action has not formed", **signal.metrics
-        )
-    return SignalValue.compliant(signal.confidence, **signal.metrics)
+    """Score the production signal unchanged; action checks are separate metadata."""
+    return signal
 
 
 def attention_action_status(scenario: Scenario, signal: SignalValue) -> str:
@@ -559,6 +671,25 @@ def scenario_capture_status(
     return True, "CAPTURE: image/face/eyes/distance ready"
 
 
+def scenario_target_ready(
+    *,
+    capture_matches: bool,
+    model_matches: bool,
+    stable_seconds: float,
+    require_model_match: bool = True,
+) -> bool:
+    """Gate a target badge while preserving quality-only legacy protocols.
+
+    Recording is still allowed while false so model errors remain collectable.
+    """
+
+    return (
+        capture_matches
+        and (model_matches or not require_model_match)
+        and stable_seconds >= TARGET_READY_SECONDS
+    )
+
+
 def run_live_validation(
     config: AppConfig,
     models: ModelFiles,
@@ -571,6 +702,11 @@ def run_live_validation(
     repetitions_override: int | None = None,
     save_error_evidence: bool = True,
     save_trial_videos: bool = False,
+    phone_score_threshold: float = 0.25,
+    phone_retain_seconds: float = 2.0,
+    phone_center_distance: float = 0.18,
+    detector_backend: str = "efficientdet",
+    yolo_model_path: str | Path | None = None,
 ) -> Path:
     import cv2
 
@@ -602,6 +738,10 @@ def run_live_validation(
         raise ValueError("at least one validation signal must be selected")
     if repetitions_override is not None and repetitions_override < 1:
         raise ValueError("repetitions override must be positive")
+    if detector_backend not in {"efficientdet", "yolo"}:
+        raise ValueError("detector_backend must be 'efficientdet' or 'yolo'")
+    if detector_backend == "yolo" and yolo_model_path is None:
+        raise ValueError("yolo_model_path is required when detector_backend='yolo'")
 
     camera = CameraWorker(config.camera)
     probe: MediapipeVisionProbe | None = None
@@ -614,7 +754,24 @@ def run_live_validation(
         first = _wait_for_frame(camera)
         environment = current_environment(config, first.frame.shape)
         profile = load_profile(profile_path, environment)
-        probe = MediapipeVisionProbe(models, config.inference, profile)
+        object_backend = (
+            YoloOnnxBackend(
+                yolo_model_path,
+                score_threshold=phone_score_threshold,
+                single_class_name="cell_phone",
+            )
+            if detector_backend == "yolo"
+            else None
+        )
+        probe = MediapipeVisionProbe(
+            models,
+            config.inference,
+            profile,
+            phone_score_threshold=phone_score_threshold,
+            phone_retain_seconds=phone_retain_seconds,
+            phone_center_distance=phone_center_distance,
+            object_backend=object_backend,
+        )
         calibration_face_scale = profile.attention.context_statistics().get(
             "face_scale", (None, None)
         )[0]
@@ -764,6 +921,8 @@ def run_away_event_validation(
     dataset_role: str,
     output_root: str | Path = "data/validation",
     suite: str = "full",
+    detector_backend: str = "efficientdet",
+    yolo_model_path: str | Path | None = None,
 ) -> Path:
     """Exercise the configured away rule against one continuous live session."""
 
@@ -771,6 +930,11 @@ def run_away_event_validation(
 
     if suite not in {"full", "brief"}:
         raise ValueError("away event suite must be 'full' or 'brief'")
+    if detector_backend not in {"efficientdet", "yolo"}:
+        raise ValueError("detector_backend must be 'efficientdet' or 'yolo'")
+    yolo_path = Path(yolo_model_path) if yolo_model_path is not None else None
+    if detector_backend == "yolo" and (yolo_path is None or not yolo_path.is_file()):
+        raise ValueError("an existing yolo_model_path is required when detector_backend='yolo'")
     scenarios = AWAY_EVENT_SCENARIOS if suite == "full" else BRIEF_AWAY_SCENARIOS
 
     away_configs = tuple(rule for rule in config.rules if rule.rule_id == "away")
@@ -791,10 +955,21 @@ def run_away_event_validation(
         first = _wait_for_frame(camera)
         environment = current_environment(config, first.frame.shape)
         profile = load_profile(profile_path, environment)
-        probe = MediapipeVisionProbe(models, config.inference, profile)
+        object_backend = (
+            YoloOnnxBackend(yolo_path, score_threshold=0.25, single_class_name="cell_phone")
+            if detector_backend == "yolo"
+            else None
+        )
+        probe = MediapipeVisionProbe(
+            models, config.inference, profile, object_backend=object_backend
+        )
+        calibration_face_scale = profile.attention.context_statistics().get(
+            "face_scale", (None, None)
+        )[0]
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         alignment = guide_alignment(camera, probe, profile, window)
+        session_face_scale = alignment.session_face_scale
 
         batch_id = (
             f"event-{suite}-{dataset_role}-"
@@ -823,7 +998,16 @@ def run_away_event_validation(
         actions: list[dict[str, Any]] = []
         samples_path = batch_directory / "event_samples.jsonl"
         for scenario in scenarios:
-            _await_ready(camera, probe, window, scenario, 1, 1)
+            _await_ready(
+                camera,
+                probe,
+                window,
+                scenario,
+                1,
+                1,
+                calibration_face_scale,
+                session_face_scale,
+            )
             segment, segment_actions, derived_records, interrupted = _run_event_segment(
                 camera,
                 probe,
@@ -857,6 +1041,11 @@ def run_away_event_validation(
                 final_score=engine.ledger.score,
             )
         report["suite"] = suite
+        report["object_detector"] = {
+            "backend": detector_backend,
+            "model_path": str(yolo_path.resolve()) if yolo_path else None,
+            "sha256": sha256_file(yolo_path) if yolo_path else None,
+        }
         (batch_directory / "event_segments.json").write_text(
             json.dumps(segments, indent=2, ensure_ascii=False, sort_keys=True),
             encoding="utf-8",
@@ -890,6 +1079,11 @@ def run_phone_event_validation(
     dataset_role: str,
     output_root: str | Path = "data/validation",
     suite: str = "full",
+    detector_backend: str = "efficientdet",
+    yolo_model_path: str | Path | None = None,
+    phone_score_threshold: float = 0.25,
+    phone_retain_seconds: float = 2.0,
+    phone_center_distance: float = 0.18,
 ) -> Path:
     """Exercise the configured phone rule in one continuous live session."""
 
@@ -897,6 +1091,11 @@ def run_phone_event_validation(
 
     if suite not in {"full", "positive"}:
         raise ValueError("phone event suite must be 'full' or 'positive'")
+    if detector_backend not in {"efficientdet", "yolo"}:
+        raise ValueError("detector_backend must be 'efficientdet' or 'yolo'")
+    yolo_path = Path(yolo_model_path) if yolo_model_path is not None else None
+    if detector_backend == "yolo" and (yolo_path is None or not yolo_path.is_file()):
+        raise ValueError("an existing yolo_model_path is required when detector_backend='yolo'")
     scenarios = (
         PHONE_EVENT_SCENARIOS if suite == "full" else PHONE_EVENT_POSITIVE_SCENARIOS
     )
@@ -919,7 +1118,27 @@ def run_phone_event_validation(
         first = _wait_for_frame(camera)
         environment = current_environment(config, first.frame.shape)
         profile = load_profile(profile_path, environment)
-        probe = MediapipeVisionProbe(models, config.inference, profile)
+        object_backend = (
+            YoloOnnxBackend(
+                yolo_path,
+                score_threshold=phone_score_threshold,
+                single_class_name="cell_phone",
+            )
+            if detector_backend == "yolo"
+            else None
+        )
+        probe = MediapipeVisionProbe(
+            models,
+            config.inference,
+            profile,
+            phone_score_threshold=phone_score_threshold,
+            phone_retain_seconds=phone_retain_seconds,
+            phone_center_distance=phone_center_distance,
+            object_backend=object_backend,
+        )
+        calibration_face_scale = profile.attention.context_statistics().get(
+            "face_scale", (None, None)
+        )[0]
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
@@ -954,7 +1173,16 @@ def run_phone_event_validation(
         actions: list[dict[str, Any]] = []
         samples_path = batch_directory / "event_samples.jsonl"
         for scenario in scenarios:
-            _await_ready(camera, probe, window, scenario, 1, 1)
+            _await_ready(
+                camera,
+                probe,
+                window,
+                scenario,
+                1,
+                1,
+                calibration_face_scale,
+                None,
+            )
             segment, segment_actions, derived_records, interrupted = _run_event_segment(
                 camera,
                 probe,
@@ -982,6 +1210,11 @@ def run_phone_event_validation(
             unknown_grace_seconds=phone_config.unknown_grace_seconds,
         )
         report["suite"] = suite
+        report["object_detector"] = {
+            "backend": detector_backend,
+            "model_path": str(yolo_path.resolve()) if yolo_path else None,
+            "sha256": sha256_file(yolo_path) if yolo_path else None,
+        }
         for filename, payload in (
             ("event_segments.json", segments),
             ("event_actions.json", actions),
@@ -1460,7 +1693,16 @@ def _await_ready(
                 distance_matches=distance_matches,
                 distance_status=distance_status,
             )
-            if capture_matches:
+            # Phone actions are externally visible to the tester, so the large
+            # badge may show whether the detector still matches the requested
+            # phone/non-phone state. Other protocols keep the historical
+            # quality-only badge to avoid turning model output into gaze or
+            # posture ground truth.
+            show_target_badge = scenario.signal_name == "phone_held"
+            confirmation_matches = capture_matches and (
+                model_matches or not show_target_badge
+            )
+            if confirmation_matches:
                 if target_since is None:
                     target_since = snapshot.captured_monotonic
             else:
@@ -1470,7 +1712,12 @@ def _await_ready(
                 if target_since is not None
                 else 0.0
             )
-            capture_ready = capture_matches and ready_seconds >= TARGET_READY_SECONDS
+            target_ready = scenario_target_ready(
+                capture_matches=capture_matches,
+                model_matches=model_matches,
+                stable_seconds=ready_seconds,
+                require_model_match=show_target_badge,
+            )
             accepted = "/".join(
                 state.value for state in scenario_accepted_states(scenario)
             )
@@ -1489,15 +1736,24 @@ def _await_ready(
                     distance_status,
                     f"MODEL TARGET: {'MATCH' if model_matches else 'NOT MATCH'} (diagnostic only)",
                     capture_status,
+                    f"CAPTURE QUALITY: {'READY' if capture_matches else 'NOT READY'}",
                     (
-                        "CAPTURE READY - confirm real action with SPACE/ENTER"
-                        if capture_ready
-                        else "CAPTURE NOT READY - adjust image/face/eyes/distance"
+                        "TARGET READY - confirm real action with SPACE/ENTER"
+                        if target_ready and show_target_badge
+                        else (
+                            "TARGET NOT READY - hold the real action; SPACE/ENTER records this model error"
+                            if show_target_badge
+                            else (
+                                "CAPTURE READY - confirm real action with SPACE/ENTER"
+                                if target_ready
+                                else "CAPTURE NOT READY - adjust image/face/eyes/distance"
+                            )
+                        )
                     ),
                     "SPACE/ENTER=confirm   ESC=question/cancel",
                 ),
             )
-            _draw_target_badge(canvas, capture_ready)
+            _draw_target_badge(canvas, target_ready, target_mode=show_target_badge)
             cv2.imshow(window, canvas)
             key = cv2.waitKey(1)
         if key & 0xFF == 27:
@@ -1635,6 +1891,9 @@ def _run_trial(
                     "signal_name": scenario.signal_name,
                     "signal_state": signal.state.value,
                     "raw_signal_state": raw_signal.state.value,
+                    "validation_signal_policy": "production_identity_v1",
+                    "direction_matches": attention_direction_matches(scenario, raw_signal)
+                    if scenario.signal_name == 'attention_away' else None,
                 }
             )
             derived_records.append(derived)
@@ -1843,14 +2102,19 @@ def _wrap_display_line(frame: Any, line: str, font_scale: float) -> list[str]:
     return rendered or [line]
 
 
-def _draw_target_badge(frame: Any, ready: bool) -> None:
+def _draw_target_badge(
+    frame: Any, ready: bool, *, target_mode: bool = False
+) -> None:
     """Draw an obvious readiness mark without depending on font glyph support."""
 
     import cv2
 
     height, width = frame.shape[:2]
     color = (55, 200, 55) if ready else (60, 170, 230)
-    label = "CAPTURE READY" if ready else "CAPTURE NOT READY"
+    if target_mode:
+        label = "TARGET READY" if ready else "TARGET NOT READY"
+    else:
+        label = "CAPTURE READY" if ready else "CAPTURE NOT READY"
     left = max(12, width - 250)
     top = max(12, height - 76)
     cv2.rectangle(frame, (left, top), (width - 12, height - 12), (20, 20, 20), -1)
@@ -1889,9 +2153,18 @@ def _config_hash(config: AppConfig) -> str:
 
 
 def _git_commit() -> str:
+    repository = Path(__file__).resolve().parents[2]
     try:
         result = subprocess.run(
-            ["git", "-c", "safe.directory=C:/Qproject/Observer", "rev-parse", "HEAD"],
+            [
+                "git",
+                "-c",
+                f"safe.directory={repository.as_posix()}",
+                "-C",
+                str(repository),
+                "rev-parse",
+                "HEAD",
+            ],
             check=True,
             capture_output=True,
             text=True,

@@ -659,7 +659,7 @@ class CalibrationTests(unittest.TestCase):
             FeatureVector(
                 "attention",
                 {
-                    "iris_a_x": 0.85,
+                    "iris_a_x": 0.9375,
                     "head_yaw_proxy": 0.35,
                     "head_pitch_proxy": 0.2,
                 },
@@ -756,7 +756,7 @@ class CalibrationTests(unittest.TestCase):
                 {
                     "predicted_x": -0.35,
                     "predicted_y": 0.60,
-                    "head_yaw_proxy": 0.21,
+                    "head_yaw_proxy": 0.19,
                     "head_pitch_proxy": 0.20,
                 },
             ),
@@ -776,9 +776,50 @@ class CalibrationTests(unittest.TestCase):
         )
 
         self.assertIs(close_inside.state, SignalState.COMPLIANT)
-        self.assertIs(compensated.state, SignalState.COMPLIANT)
-        self.assertIs(true_outside.state, SignalState.VIOLATION)
+        # Once yaw reaches the coarse gate, the compensated leftward gaze is
+        # intentionally treated as a real head+eye left departure.
+        self.assertIs(compensated.state, SignalState.VIOLATION)
+        # Fine gaze alone (yaw 0.19 < coarse threshold 0.20) is now soft
+        # evidence, even when its regressed coordinate lies outside.
+        self.assertIs(true_outside.state, SignalState.UNKNOWN)
+        self.assertIn('coarse head', true_outside.reason)
+        for baseline_value in (None, baseline):
+            for x, y in ((-0.4, 0.5), (0.5, -0.4)):
+                soft = calibration.evaluate_with_session_baseline(
+                    FeatureVector('attention', {
+                        'predicted_x': x, 'predicted_y': y,
+                        'head_yaw_proxy': 0.0, 'head_pitch_proxy': 0.2,
+                    }), baseline_value,
+                )
+                self.assertIs(soft.state, SignalState.UNKNOWN)
         self.assertIs(strong_head_turn.state, SignalState.VIOLATION)
+
+        coarse_left = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "predicted_x": 0.50,
+                    "predicted_y": 0.60,
+                    "head_yaw_proxy": 0.28,
+                    "head_pitch_proxy": 0.20,
+                },
+            ),
+            baseline,
+        )
+        compensated_to_screen = calibration.evaluate_with_session_baseline(
+            FeatureVector(
+                "attention",
+                {
+                    "predicted_x": 0.75,
+                    "predicted_y": 0.60,
+                    "head_yaw_proxy": 0.28,
+                    "head_pitch_proxy": 0.20,
+                },
+            ),
+            baseline,
+        )
+        self.assertIs(coarse_left.state, SignalState.VIOLATION)
+        self.assertIs(compensated_to_screen.state, SignalState.COMPLIANT)
 
     def test_profile_roundtrip_and_environment_guard(self) -> None:
         posture = fit_posture_calibration(

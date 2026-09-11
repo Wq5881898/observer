@@ -3,7 +3,6 @@ import unittest
 from observer.fusion import ObservationFusion
 from observer.observations import (
     NormalizedBox,
-    NormalizedPoint,
     PhoneCandidate,
     SignalState,
     SignalValue,
@@ -11,6 +10,39 @@ from observer.observations import (
 
 
 class ObservationFusionTests(unittest.TestCase):
+    def test_person_fallback_supports_hidden_face_empty_and_return(self) -> None:
+        fusion = ObservationFusion()
+        for at, face, pose, person, expected in (
+            (10.0, 0, 0, 1, SignalState.COMPLIANT),
+            (11.0, 0, 0, 0, SignalState.VIOLATION),
+            (12.0, 1, 1, 1, SignalState.COMPLIANT),
+        ):
+            fusion.update_face(at, face)
+            fusion.update_pose(at, pose)
+            fusion.update_phones(at, ())
+            fusion.update_person_presence(at, person)
+            self.assertIs(fusion.build(at + 0.1).signal('away').state, expected)
+
+    def test_phone_updates_do_not_supply_negative_person_evidence(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_face(10.0, 0)
+        fusion.update_pose(10.0, 0)
+        fusion.update_phones(10.0, ())
+        self.assertIs(fusion.build(10.1).signal('away').state, SignalState.UNKNOWN)
+
+    def test_phone_updates_do_not_refresh_old_person_result(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_person_presence(1.0, 1)
+        fusion.update_face(10.0, 0)
+        fusion.update_pose(10.0, 0)
+        fusion.update_phones(10.0, ())
+        self.assertIs(fusion.build(10.1).signal('away').state, SignalState.UNKNOWN)
+
+    def test_person_updates_do_not_refresh_phone_result(self) -> None:
+        fusion = ObservationFusion()
+        fusion.update_person_presence(10.0, 1)
+        self.assertIs(fusion.build(10.1).signal('phone_held').state, SignalState.UNKNOWN)
+
     def test_person_present_when_either_face_or_pose_is_fresh(self) -> None:
         fusion = ObservationFusion()
         fusion.update_face(10.0, 1)
@@ -21,7 +53,7 @@ class ObservationFusionTests(unittest.TestCase):
         fusion = ObservationFusion()
         fusion.update_face(10.0, 0)
         self.assertIs(fusion.build(10.1).signal("away").state, SignalState.UNKNOWN)
-        fusion.update_pose(10.1, 0, ())
+        fusion.update_pose(10.1, 0)
         self.assertIs(fusion.build(10.2).signal("away").state, SignalState.UNKNOWN)
         fusion.update_person_presence(10.1, 0)
         self.assertIs(fusion.build(10.2).signal("away").state, SignalState.VIOLATION)
@@ -29,14 +61,14 @@ class ObservationFusionTests(unittest.TestCase):
     def test_implausible_pose_does_not_count_as_person_presence(self) -> None:
         fusion = ObservationFusion()
         fusion.update_face(10.0, 0)
-        fusion.update_pose(10.0, 1, (), presence_credible=False)
+        fusion.update_pose(10.0, 1, presence_credible=False)
         fusion.update_person_presence(10.0, 0)
         self.assertIs(fusion.build(10.1).signal("away").state, SignalState.VIOLATION)
 
     def test_person_detector_confirms_presence_without_face_or_pose(self) -> None:
         fusion = ObservationFusion()
         fusion.update_face(10.0, 0)
-        fusion.update_pose(10.0, 0, ())
+        fusion.update_pose(10.0, 0)
         fusion.update_person_presence(10.0, 1)
         self.assertIs(fusion.build(10.1).signal("away").state, SignalState.COMPLIANT)
 
@@ -46,9 +78,8 @@ class ObservationFusionTests(unittest.TestCase):
         signal = fusion.build(10.0).signal("phone_held")
         self.assertIs(signal.state, SignalState.UNKNOWN)
 
-    def test_fresh_phone_and_wrist_produce_held_candidate(self) -> None:
+    def test_fresh_visible_phone_is_violation_without_pose(self) -> None:
         fusion = ObservationFusion()
-        fusion.update_pose(10.0, 1, (NormalizedPoint(0.52, 0.5, 0.9),))
         fusion.update_phones(
             10.0,
             (PhoneCandidate(NormalizedBox(0.4, 0.4, 0.1, 0.2), 0.8),),
@@ -56,28 +87,21 @@ class ObservationFusionTests(unittest.TestCase):
         signal = fusion.build(10.1).signal("phone_held")
         self.assertIs(signal.state, SignalState.VIOLATION)
 
-    def test_phone_presence_without_fresh_pose_is_unknown(self) -> None:
+    def test_phone_presence_does_not_require_pose(self) -> None:
         fusion = ObservationFusion()
         fusion.update_phones(
             10.0,
             (PhoneCandidate(NormalizedBox(0.4, 0.4, 0.1, 0.2), 0.8),),
         )
         signal = fusion.build(10.1).signal("phone_held")
-        self.assertIs(signal.state, SignalState.UNKNOWN)
+        self.assertIs(signal.state, SignalState.VIOLATION)
 
-    def test_no_phone_requires_at_least_one_observable_wrist(self) -> None:
+    def test_no_phone_is_compliant_even_without_hands(self) -> None:
         fusion = ObservationFusion()
-        fusion.update_pose(10.0, 1, (NormalizedPoint(0.5, 0.7, 0.9),))
         fusion.update_phones(10.0, ())
         self.assertIs(
             fusion.build(10.1).signal("phone_held").state, SignalState.COMPLIANT
         )
-
-    def test_no_phone_and_no_observable_hands_is_unknown(self) -> None:
-        fusion = ObservationFusion()
-        fusion.update_pose(10.0, 1, (NormalizedPoint(0.5, 0.7, 0.2),))
-        fusion.update_phones(10.0, ())
-        self.assertIs(fusion.build(10.1).signal("phone_held").state, SignalState.UNKNOWN)
 
     def test_calibrated_signals_flow_through_when_fresh(self) -> None:
         fusion = ObservationFusion()
@@ -123,7 +147,7 @@ class ObservationFusionTests(unittest.TestCase):
         fusion = ObservationFusion()
         fusion.update_quality(10.0, False, "frame too dark")
         fusion.update_face(10.0, 0)
-        fusion.update_pose(10.0, 0, ())
+        fusion.update_pose(10.0, 0)
         fusion.update_person_presence(10.0, 0)
         fusion.update_attention(10.0, SignalValue.violation(confidence=1.0))
         fusion.update_posture(10.0, SignalValue.violation(confidence=1.0))

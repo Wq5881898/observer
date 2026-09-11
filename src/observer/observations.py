@@ -113,35 +113,11 @@ class PhoneCandidate:
             raise ValueError("phone confidence must be between 0 and 1")
 
 
-def phone_held_signal(
-    phones: tuple[PhoneCandidate, ...],
-    wrists: tuple[NormalizedPoint, ...],
-    *,
-    wrist_visibility_threshold: float = 0.5,
-    maximum_normalized_distance: float = 0.12,
-) -> SignalValue:
-    """Fuse phone boxes with visible wrists; phone presence alone is never a violation."""
-
+def phone_visible_signal(phones: tuple[PhoneCandidate, ...]) -> SignalValue:
+    """Classify a confirmed in-frame phone candidate as a phone-use violation."""
     if not phones:
         return SignalValue.compliant(confidence=1.0, phone_count=0.0)
-    visible_wrists = tuple(
-        wrist for wrist in wrists if wrist.visibility >= wrist_visibility_threshold
+    return SignalValue.violation(
+        confidence=max(phone.confidence for phone in phones),
+        phone_count=float(len(phones)),
     )
-    if not visible_wrists:
-        return SignalValue.unknown("phone visible but wrists are not observable")
-
-    pairs = [
-        (phone, wrist, phone.box.distance_to(wrist))
-        for phone in phones
-        for wrist in visible_wrists
-    ]
-    phone, wrist, minimum_distance = min(pairs, key=lambda item: item[2])
-    metrics = {
-        "phone_count": float(len(phones)),
-        "visible_wrist_count": float(len(visible_wrists)),
-        "phone_wrist_distance": minimum_distance,
-    }
-    if minimum_distance <= maximum_normalized_distance:
-        confidence = min(phone.confidence, wrist.visibility)
-        return SignalValue.violation(confidence=confidence, **metrics)
-    return SignalValue.compliant(confidence=phone.confidence, **metrics)

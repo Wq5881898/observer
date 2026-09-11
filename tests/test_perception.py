@@ -139,13 +139,27 @@ class PerceptionTests(unittest.TestCase):
         self.assertEqual(tracker.update(1.1, (phone,)), (phone,))
         self.assertEqual(tracker.update(1.4, ()), ())
 
-    def test_default_phone_tracker_bridges_one_second_detector_gap(self) -> None:
+    def test_default_phone_tracker_bridges_short_detector_gaps(self) -> None:
         tracker = PhoneCandidateTracker()
         phone = PhoneCandidate(NormalizedBox(0.4, 0.4, 0.1, 0.2), 0.9)
         self.assertEqual(tracker.update(1.0, (phone,)), ())
         self.assertEqual(tracker.update(1.2, (phone,)), (phone,))
         self.assertEqual(tracker.update(2.3, ()), (phone,))
-        self.assertEqual(tracker.update(2.8, ()), ())
+        self.assertEqual(tracker.update(3.1, ()), (phone,))
+        self.assertEqual(tracker.update(3.3, ()), ())
+
+    def test_phone_tracker_does_not_abandon_track_for_remote_false_box(self) -> None:
+        tracker = PhoneCandidateTracker(confirmation_hits=2)
+        phone = PhoneCandidate(NormalizedBox(0.45, 0.75, 0.25, 0.2), 0.8)
+        moved_phone = PhoneCandidate(NormalizedBox(0.47, 0.76, 0.24, 0.19), 0.3)
+        remote_false_box = PhoneCandidate(NormalizedBox(0.0, 0.8, 0.1, 0.1), 0.4)
+
+        self.assertEqual(tracker.update(1.0, (phone,)), ())
+        self.assertEqual(tracker.update(1.2, (phone,)), (phone,))
+        self.assertEqual(
+            tracker.update(1.4, (remote_false_box, moved_phone)),
+            (moved_phone,),
+        )
 
     def test_person_presence_requires_consecutive_hits(self) -> None:
         tracker = PresenceHitTracker(confirmation_hits=2)

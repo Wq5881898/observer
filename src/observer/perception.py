@@ -175,7 +175,7 @@ class PhoneCandidateTracker:
         *,
         confirmation_hits: int = 2,
         maximum_center_distance: float = 0.18,
-        retain_seconds: float = 1.5,
+        retain_seconds: float = 2.0,
         burst_seconds: float = 2.0,
     ) -> None:
         if confirmation_hits < 1 or min(retain_seconds, burst_seconds) < 0:
@@ -193,7 +193,20 @@ class PhoneCandidateTracker:
         self, at_monotonic: float, candidates: Sequence[PhoneCandidate]
     ) -> tuple[PhoneCandidate, ...]:
         if candidates:
-            selected = max(candidates, key=lambda candidate: candidate.confidence)
+            nearby = (
+                tuple(
+                    candidate
+                    for candidate in candidates
+                    if self._last is not None
+                    and self._center_distance(self._last, candidate)
+                    <= self.maximum_center_distance
+                )
+                if self._last is not None
+                else ()
+            )
+            # Keep an established spatial track when a separate, slightly
+            # higher-confidence false box appears elsewhere in the frame.
+            selected = max(nearby or candidates, key=lambda candidate: candidate.confidence)
             if (
                 self._last is not None
                 and self._center_distance(self._last, selected)

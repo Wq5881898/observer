@@ -344,7 +344,8 @@ def guide_alignment(
     longest_stable_seconds = 0.0
     stability = AlignmentStability(stable_seconds)
     last_sequence = 0
-    previous_face_runs = probe.measurements.face.runs
+    initial_face_runs = probe.measurements.face.runs
+    previous_face_runs = initial_face_runs
     previous_pose_runs = probe.measurements.pose.runs
     attention_feature_counts: dict[str, int] = {}
     posture_feature_counts: dict[str, int] = {}
@@ -521,14 +522,23 @@ def guide_attention_session_baseline(
     valid_since: float | None = None
     samples: list[FeatureVector] = []
     last_sequence = 0
-    previous_face_runs = probe.measurements.face.runs
+    initial_face_runs = probe.measurements.face.runs
+    previous_face_runs = initial_face_runs
+    valid_frame_count = 0
+    invalid_reason_counts: dict[str, int] = {}
+    longest_valid_seconds = 0.0
+    last_invalid_reason = "no camera frame"
     try:
         while True:
             now = time.monotonic()
             if now - started >= timeout_seconds:
                 raise RuntimeError(
-                    "session attention setup timed out; keep the full face visible "
-                    "and look at the screen centre"
+                    _attention_setup_timeout_message(
+                        face_runs=probe.measurements.face.runs - initial_face_runs,
+                        valid_frames=valid_frame_count,
+                        longest_valid_seconds=longest_valid_seconds,
+                        invalid_reason_counts=invalid_reason_counts,
+                    )
                 )
             snapshot = camera.buffer.latest(after_sequence=last_sequence)
             if snapshot is None:
@@ -542,17 +552,27 @@ def guide_attention_session_baseline(
             )
             feature = probe.latest_smoothed_attention_features
             quality = probe.latest_quality
-            valid = (
-                feature is not None
-                and not feature.reasons
-                and quality is not None
-                and quality.observable
-                and {
+            invalid_reasons: list[str] = []
+            if feature is None:
+                invalid_reasons.append("face_or_eyes_not_observable")
+            else:
+                invalid_reasons.extend(f"feature:{reason}" for reason in feature.reasons)
+                if not {
                     "head_yaw_proxy",
                     "head_pitch_proxy",
-                }.issubset(feature.values)
+                }.issubset(feature.values):
+                    invalid_reasons.append("head_pose_unavailable")
+            if quality is None:
+                invalid_reasons.append("quality_unavailable")
+            elif not quality.observable:
+                invalid_reasons.extend(
+                    f"quality:{reason}" for reason in quality.reasons
+                )
+            valid = (
+                not invalid_reasons
             )
             if valid:
+                valid_frame_count += 1
                 if valid_since is None:
                     valid_since = now
                     samples.clear()
@@ -560,10 +580,14 @@ def guide_attention_session_baseline(
                     samples.append(feature)
                     previous_face_runs = probe.measurements.face.runs
             else:
+                last_invalid_reason = invalid_reasons[0]
+                for reason in set(invalid_reasons):
+                    invalid_reason_counts[reason] = invalid_reason_counts.get(reason, 0) + 1
                 valid_since = None
                 samples.clear()
 
             held = 0.0 if valid_since is None else now - valid_since
+            longest_valid_seconds = max(longest_valid_seconds, held)
             preview = cv2.flip(snapshot.frame, 1)
             cv2.rectangle(preview, (0, 0), (preview.shape[1], 112), (20, 20, 20), -1)
             cv2.putText(
@@ -589,7 +613,7 @@ def guide_attention_session_baseline(
             status = (
                 f"Hold still {min(held, stable_seconds):.1f}/{stable_seconds:.1f}s"
                 if valid
-                else "Full face and both eyes must be visible"
+                else f"Not ready: {last_invalid_reason}"
             )
             cv2.putText(
                 preview,
@@ -619,6 +643,28 @@ def guide_attention_session_baseline(
             cv2.destroyWindow(window)
         except cv2.error:
             pass
+
+
+def _attention_setup_timeout_message(
+    *,
+    face_runs: int,
+    valid_frames: int,
+    longest_valid_seconds: float,
+    invalid_reason_counts: dict[str, int],
+) -> str:
+    ranked_reasons = sorted(
+        invalid_reason_counts.items(), key=lambda item: (-item[1], item[0])
+    )
+    reason_summary = ", ".join(
+        f"{reason}={count}" for reason, count in ranked_reasons[:3]
+    ) or "none"
+    return (
+        "session attention setup timed out; keep the full face visible "
+        "and look at the screen centre; "
+        f"face_runs={face_runs}, valid_frames={valid_frames}, "
+        f"longest_valid={longest_valid_seconds:.2f}s, "
+        f"invalid_reasons={reason_summary}"
+    )
 
 
 def verify_aligned_baseline(

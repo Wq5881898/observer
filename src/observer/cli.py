@@ -14,6 +14,7 @@ from typing import Sequence
 from observer.camera import CameraWorker
 from observer.config import load_config
 from observer.models import sha256_file, verify_model_directory
+from observer.object_detection import detector_runtime_report, is_phone_class_name
 from observer.resources import ResourceSampler, percentile, summarize_resources
 
 
@@ -60,6 +61,31 @@ ATTENTION_BOUNDARY_CUES = (
     (141.0, 151.0, "score_a11", "A11 HOLD: final screen center."),
 )
 
+C_CLOSEOUT_HOLDOUT_CUES = (
+    (0.0, 10.0, "h01_neutral", "H01: Work normally. Face visible. NO PHONE."),
+    (10.0, 15.0, "transition_away", "Prepare H02: leave the camera view."),
+    (
+        15.0,
+        40.0,
+        "h02_away",
+        "H02: Stay OUT. No face, shoulder, arm, or torso anywhere in frame.",
+    ),
+    (40.0, 45.0, "transition_away_recovery", "Return and sit naturally."),
+    (45.0, 55.0, "h03_away_recovery", "H03: Work normally. Face visible."),
+    (55.0, 60.0, "transition_phone", "Prepare H04: pick up a visible phone."),
+    (60.0, 75.0, "h04_phone", "H04: Use a clearly visible PHONE naturally."),
+    (75.0, 80.0, "transition_phone_recovery", "Put the phone fully out of view."),
+    (80.0, 90.0, "h05_phone_recovery", "H05: Work normally. NO PHONE."),
+    (90.0, 95.0, "transition_face_cover", "Prepare H06: cover face, keep torso visible."),
+    (95.0, 103.0, "h06_face_cover", "H06: Cover FACE with blank paper; torso visible."),
+    (103.0, 108.0, "transition_face_recovery", "Remove paper and sit naturally."),
+    (108.0, 116.0, "h07_face_recovery", "H07: Work normally. Face visible."),
+    (116.0, 121.0, "transition_camera_cover", "Prepare H08: fully cover CAMERA lens."),
+    (121.0, 129.0, "h08_camera_cover", "H08: Keep CAMERA lens fully covered."),
+    (129.0, 134.0, "transition_final", "Uncover camera and sit naturally."),
+    (134.0, 144.0, "h09_final", "H09: Final normal work. Face visible."),
+)
+
 ATTENTION_BOUNDARY_CASES = {
     "a01": {"expected_state": "compliant", "label": "natural_center"},
     "a02": {"expected_state": "violation", "label": "outside_left_low"},
@@ -78,6 +104,7 @@ GUIDED_DEBUG_PLANS = {
     "full": GUIDED_DEBUG_CUES,
     "attention-minute": ATTENTION_MINUTE_CUES,
     "attention-boundary": ATTENTION_BOUNDARY_CUES,
+    "c-closeout-holdout": C_CLOSEOUT_HOLDOUT_CUES,
 }
 
 
@@ -295,6 +322,139 @@ def _doctor(config_path: Path | None) -> int:
     return 0 if version_supported and all(packages.values()) else 1
 
 
+def _yolo_doctor(model_path: Path) -> int:
+    """Check optional YOLO ONNX Runtime and model-file readiness."""
+
+    report = detector_runtime_report(model_path)
+    report["model"]["path"] = str(model_path.resolve())
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0 if report["ready"] else 1
+
+
+def _yolo_replay(
+    video_path: Path,
+    model_path: Path,
+    output_path: Path,
+    score_threshold: float,
+    iou_threshold: float,
+    input_size: int,
+    sample_frames: int | None,
+) -> int:
+    """Replay one saved video through YOLO without opening the camera."""
+
+    import cv2
+
+    from observer.object_detection import YoloOnnxBackend
+
+    if not video_path.is_file():
+        raise FileNotFoundError(f"video not found: {video_path}")
+    backend = YoloOnnxBackend(
+        model_path,
+        score_threshold=score_threshold,
+        iou_threshold=iou_threshold,
+        input_size=input_size,
+        single_class_name="cell_phone",
+    )
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise RuntimeError(f"could not open video: {video_path}")
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    total_frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    if sample_frames is not None and sample_frames <= 0:
+        raise ValueError("sample_frames must be positive")
+    sampled_indices: list[int] | None = None
+    if sample_frames is not None:
+        if total_frame_count <= 0:
+            raise RuntimeError("video does not expose a usable frame count for sampling")
+        sample_count = min(sample_frames, total_frame_count)
+        if sample_count == 1:
+            sampled_indices = [total_frame_count // 2]
+        else:
+            sampled_indices = sorted(
+                {
+                    round(index * (total_frame_count - 1) / (sample_count - 1))
+                    for index in range(sample_count)
+                }
+            )
+    frames: list[dict[str, object]] = []
+
+    def analyze_frame(frame: object, index: int) -> None:
+        timestamp_ms = round((index / fps) * 1000) if fps > 0 else index
+        detections = backend.detect(frame, timestamp_ms)
+        frames.append(
+            {
+                "frame_index": index,
+                "timestamp_seconds": round(index / fps, 4) if fps > 0 else None,
+                "latency_ms": round(backend.last_latency_ms, 3),
+                "detections": [
+                    {
+                        "class_name": detection.class_name,
+                        "confidence": round(detection.confidence, 6),
+                        "box": {
+                            "x": round(detection.box.x, 6),
+                            "y": round(detection.box.y, 6),
+                            "width": round(detection.box.width, 6),
+                            "height": round(detection.box.height, 6),
+                        },
+                    }
+                    for detection in detections
+                ],
+            }
+        )
+
+    try:
+        if sampled_indices is not None:
+            for index in sampled_indices:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+                ok, frame = capture.read()
+                if not ok:
+                    raise RuntimeError(f"could not read sampled frame {index}: {video_path}")
+                analyze_frame(frame, index)
+        else:
+            index = 0
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                analyze_frame(frame, index)
+                index += 1
+    finally:
+        capture.release()
+        backend.close()
+    phone_frames = [
+        frame
+        for frame in frames
+        if any(is_phone_class_name(item["class_name"]) for item in frame["detections"])
+    ]
+    latencies = [float(frame["latency_ms"]) for frame in frames]
+    report = {
+        "video": str(video_path.resolve()),
+        "model": str(model_path.resolve()),
+        "frames": frames,
+        "summary": {
+            "source_frame_count": total_frame_count,
+            "frame_count": len(frames),
+            "sampling": "uniform" if sampled_indices is not None else "all",
+            "fps": fps,
+            "phone_positive_frames": len(phone_frames),
+            "phone_positive_fraction": round(len(phone_frames) / len(frames), 6)
+            if frames
+            else 0.0,
+            "latency_average_ms": round(sum(latencies) / len(latencies), 3)
+            if latencies
+            else 0.0,
+            "latency_p95_ms": round(percentile(latencies, 0.95), 3) if latencies else 0.0,
+        },
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(json.dumps({"report": str(output_path.resolve()), **report["summary"]}, indent=2))
+    return 0
+
+
 def _camera_smoke(config_path: Path | None, seconds: float) -> int:
     if seconds <= 0:
         raise ValueError("seconds must be positive")
@@ -349,7 +509,16 @@ def _vision_smoke(
     debug_video_path: Path | None = None,
     guided_debug_cues: bool = False,
     guided_debug_plan: str | None = None,
+    detector_backend: str = 'efficientdet',
+    yolo_model_path: Path | None = None,
 ) -> int:
+    phone_score_threshold = 0.25
+    phone_retain_seconds = 2.0
+    phone_center_distance = 0.18
+    if detector_backend not in ('efficientdet', 'yolo'):
+        raise ValueError('unsupported detector backend')
+    if detector_backend == 'yolo' and (yolo_model_path is None or not yolo_model_path.is_file()):
+        raise ValueError('YOLO requires an existing --yolo-model')
     if seconds <= 0:
         raise ValueError("seconds must be positive")
     if debug_video_path is not None:
@@ -449,7 +618,19 @@ def _vision_smoke(
                 raise RuntimeError("camera opened but did not produce a frame")
             environment = current_environment(config, first_snapshot.frame.shape)
             profile = load_profile(profile_path, environment)
-        probe = MediapipeVisionProbe(models, config.inference, profile)
+        object_backend = None
+        if detector_backend == 'yolo':
+            from observer.object_detection import YoloOnnxBackend
+            object_backend = YoloOnnxBackend(yolo_model_path, single_class_name='cell_phone')
+        probe = MediapipeVisionProbe(
+            models,
+            config.inference,
+            profile,
+            phone_score_threshold=phone_score_threshold,
+            phone_retain_seconds=phone_retain_seconds,
+            phone_center_distance=phone_center_distance,
+            object_backend=object_backend,
+        )
         if profile is not None:
             from observer.alignment import (
                 AlignmentCancelled,
@@ -712,10 +893,19 @@ def _vision_smoke(
             )
             if selected_plan == "attention-boundary"
             else [],
-            "requires_video_truth_review": selected_plan == "attention-boundary",
+            "requires_video_truth_review": selected_plan
+            in {"attention-boundary", "c-closeout-holdout"},
         },
         "camera": asdict(camera.stats),
         "vision": probe.summary() if probe is not None else None,
+        "object_detector": {
+            "backend": detector_backend,
+            "model_path": str(yolo_model_path.resolve()) if yolo_model_path else None,
+            "sha256": sha256_file(yolo_model_path) if yolo_model_path else None,
+            "phone_score_threshold": phone_score_threshold,
+            "phone_retain_seconds": phone_retain_seconds,
+            "phone_center_distance": phone_center_distance,
+        },
         "last_signals": (
             {
                 name: {
@@ -1040,6 +1230,11 @@ def _validate_live(
     repetitions: int | None,
     save_error_evidence: bool,
     save_trial_videos: bool,
+    phone_score_threshold: float,
+    phone_retain_seconds: float,
+    phone_center_distance: float,
+    detector_backend: str = "efficientdet",
+    yolo_model_path: Path | None = None,
 ) -> int:
     from observer.alignment import AlignmentCancelled, AlignmentTimeout
     from observer.live_validation import run_live_validation
@@ -1069,6 +1264,11 @@ def _validate_live(
             repetitions_override=repetitions,
             save_error_evidence=save_error_evidence,
             save_trial_videos=save_trial_videos,
+            phone_score_threshold=phone_score_threshold,
+            phone_retain_seconds=phone_retain_seconds,
+            phone_center_distance=phone_center_distance,
+            detector_backend=detector_backend,
+            yolo_model_path=yolo_model_path,
         )
     except AlignmentCancelled as exc:
         print(json.dumps({"aligned": False, "reason": str(exc)}, indent=2))
@@ -1113,6 +1313,8 @@ def _validate_away_events(
     dataset_role: str,
     output_root: Path,
     suite: str,
+    detector_backend: str = "efficientdet",
+    yolo_model_path: Path | None = None,
 ) -> int:
     from observer.live_validation import run_away_event_validation
 
@@ -1125,6 +1327,8 @@ def _validate_away_events(
         dataset_role=dataset_role,
         output_root=output_root,
         suite=suite,
+        detector_backend=detector_backend,
+        yolo_model_path=yolo_model_path,
     )
     report_path = batch_directory / "event_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -1150,6 +1354,11 @@ def _validate_phone_events(
     dataset_role: str,
     output_root: Path,
     suite: str,
+    detector_backend: str = "efficientdet",
+    yolo_model_path: Path | None = None,
+    phone_score_threshold: float = 0.25,
+    phone_retain_seconds: float = 2.0,
+    phone_center_distance: float = 0.18,
 ) -> int:
     from observer.live_validation import run_phone_event_validation
 
@@ -1162,6 +1371,11 @@ def _validate_phone_events(
         dataset_role=dataset_role,
         output_root=output_root,
         suite=suite,
+        detector_backend=detector_backend,
+        yolo_model_path=yolo_model_path,
+        phone_score_threshold=phone_score_threshold,
+        phone_retain_seconds=phone_retain_seconds,
+        phone_center_distance=phone_center_distance,
     )
     report_path = batch_directory / "event_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -1193,6 +1407,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, help="optional JSON configuration path")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor", help="validate runtime, packages, and configuration")
+    yolo_doctor_parser = subparsers.add_parser(
+        "yolo-doctor", help="check optional YOLO ONNX Runtime and model readiness"
+    )
+    yolo_doctor_parser.add_argument(
+        "--model", type=Path, default=Path("models/yolo/yolo11n.onnx")
+    )
+    yolo_replay_parser = subparsers.add_parser(
+        "yolo-replay", help="replay one saved video through YOLO without a camera"
+    )
+    yolo_replay_parser.add_argument("--video", type=Path, required=True)
+    yolo_replay_parser.add_argument("--model", type=Path, required=True)
+    yolo_replay_parser.add_argument("--output", type=Path, required=True)
+    yolo_replay_parser.add_argument("--score-threshold", type=float, default=0.25)
+    yolo_replay_parser.add_argument("--iou-threshold", type=float, default=0.45)
+    yolo_replay_parser.add_argument("--input-size", type=int, default=640)
+    yolo_replay_parser.add_argument(
+        "--sample-frames",
+        type=int,
+        help="uniformly sample this many frames instead of replaying every frame",
+    )
     camera_parser = subparsers.add_parser(
         "camera-smoke", help="capture without preview or recording and report resources"
     )
@@ -1203,6 +1437,8 @@ def build_parser() -> argparse.ArgumentParser:
     vision_parser.add_argument("--seconds", type=float, default=30.0)
     vision_parser.add_argument("--models-dir", type=Path, default=Path("models"))
     vision_parser.add_argument("--profile", type=Path)
+    vision_parser.add_argument('--detector-backend', choices=('efficientdet', 'yolo'), default='efficientdet')
+    vision_parser.add_argument('--yolo-model', type=Path)
     vision_parser.add_argument(
         "--evidence-dir",
         type=Path,
@@ -1298,6 +1534,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="opt in to temporary videos of scored trial intervals only",
     )
+    live_parser.add_argument(
+        "--phone-score-threshold",
+        type=float,
+        default=0.25,
+        help="experimental phone detector score threshold for tuning only",
+    )
+    live_parser.add_argument(
+        "--phone-retain-seconds",
+        type=float,
+        default=2.0,
+        help="experimental phone candidate retention seconds for tuning only",
+    )
+    live_parser.add_argument(
+        "--phone-center-distance",
+        type=float,
+        default=0.18,
+        help="experimental maximum phone candidate center distance for tuning only",
+    )
+    live_parser.add_argument(
+        "--detector-backend",
+        choices=("efficientdet", "yolo"),
+        default="efficientdet",
+        help="object detector for this isolated batch; default remains EfficientDet",
+    )
+    live_parser.add_argument(
+        "--yolo-model",
+        type=Path,
+        help="YOLO ONNX model path (required with --detector-backend yolo)",
+    )
     event_parser = subparsers.add_parser(
         "validate-away-events",
         help="run continuous Stage C away alert, penalty, and recovery scenarios",
@@ -1314,6 +1579,10 @@ def build_parser() -> argparse.ArgumentParser:
     event_parser.add_argument(
         "--output-root", type=Path, default=Path("data/validation")
     )
+    event_parser.add_argument(
+        "--detector-backend", choices=("efficientdet", "yolo"), default="efficientdet"
+    )
+    event_parser.add_argument("--yolo-model", type=Path)
     phone_event_parser = subparsers.add_parser(
         "validate-phone-events",
         help="run continuous Stage C phone alert, penalty, recovery, and false-positive scenarios",
@@ -1332,6 +1601,13 @@ def build_parser() -> argparse.ArgumentParser:
     phone_event_parser.add_argument(
         "--output-root", type=Path, default=Path("data/validation")
     )
+    phone_event_parser.add_argument(
+        "--detector-backend", choices=("efficientdet", "yolo"), default="efficientdet"
+    )
+    phone_event_parser.add_argument("--yolo-model", type=Path)
+    phone_event_parser.add_argument("--phone-score-threshold", type=float, default=0.25)
+    phone_event_parser.add_argument("--phone-retain-seconds", type=float, default=2.0)
+    phone_event_parser.add_argument("--phone-center-distance", type=float, default=0.18)
     purge_parser = subparsers.add_parser(
         "evidence-purge", help="dry-run or delete expired Stage C error evidence"
     )
@@ -1339,13 +1615,30 @@ def build_parser() -> argparse.ArgumentParser:
     purge_parser.add_argument(
         "--apply", action="store_true", help="delete listed expired image files"
     )
+    from observer.product_cli import register_parser
+    register_parser(subparsers)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "product":
+        from observer.product_cli import dispatch
+        return dispatch(args)
     if args.command == "doctor":
         return _doctor(args.config)
+    if args.command == "yolo-doctor":
+        return _yolo_doctor(args.model)
+    if args.command == "yolo-replay":
+        return _yolo_replay(
+            args.video,
+            args.model,
+            args.output,
+            args.score_threshold,
+            args.iou_threshold,
+            args.input_size,
+            args.sample_frames,
+        )
     if args.command == "camera-smoke":
         return _camera_smoke(args.config, args.seconds)
     if args.command == "vision-smoke":
@@ -1359,6 +1652,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.debug_video,
             args.guided_debug_cues,
             args.guided_debug_plan,
+            args.detector_backend,
+            args.yolo_model,
         )
     if args.command == "calibrate":
         return _calibrate(args.config, args.models_dir, args.output)
@@ -1390,6 +1685,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.repetitions,
             args.save_error_evidence,
             args.debug_trial_videos,
+            args.phone_score_threshold,
+            args.phone_retain_seconds,
+            args.phone_center_distance,
+            args.detector_backend,
+            args.yolo_model,
         )
     if args.command == "validate-away-events":
         return _validate_away_events(
@@ -1399,6 +1699,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.role,
             args.output_root,
             args.suite,
+            args.detector_backend,
+            args.yolo_model,
         )
     if args.command == "validate-phone-events":
         return _validate_phone_events(
@@ -1408,6 +1710,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.role,
             args.output_root,
             args.suite,
+            args.detector_backend,
+            args.yolo_model,
+            args.phone_score_threshold,
+            args.phone_retain_seconds,
+            args.phone_center_distance,
         )
     if args.command == "evidence-purge":
         return _evidence_purge(args.index, args.apply)

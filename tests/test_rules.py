@@ -1,7 +1,7 @@
 import unittest
 
 from observer.observations import Observation, SignalValue
-from observer.rules import ActionKind, RuleConfig, RulePhase, SustainedRule
+from observer.rules import ActionKind, RuleConfig, RulePhase, SustainedRule, default_rule_configs
 from observer.scoring import RuleEngine
 
 
@@ -10,6 +10,26 @@ def observation(at: float, signal: SignalValue) -> Observation:
 
 
 class SustainedRuleTests(unittest.TestCase):
+    def test_soft_defaults_alert_but_never_emit_penalties(self) -> None:
+        for config in default_rule_configs():
+            if config.rule_id not in ('attention_away', 'posture_deviation', 'ergonomic_risk'):
+                continue
+            with self.subTest(rule=config.rule_id):
+                rule = SustainedRule(config)
+                actions = []
+                for second in range(181):
+                    actions.extend(rule.update(Observation(float(second), {
+                        config.signal_name: SignalValue.violation()
+                    })))
+                self.assertTrue(any(a.kind is ActionKind.ALERT for a in actions))
+                self.assertFalse(any(a.kind is ActionKind.PENALTY for a in actions))
+                self.assertEqual(sum(a.kind is ActionKind.ALERT for a in actions), 1)
+                for second in range(181, 188):
+                    actions.extend(rule.update(Observation(float(second), {
+                        config.signal_name: SignalValue.compliant()
+                    })))
+                self.assertIs(rule.phase, RulePhase.CLEAR)
+
     def setUp(self) -> None:
         self.config = RuleConfig(
             "phone_held",

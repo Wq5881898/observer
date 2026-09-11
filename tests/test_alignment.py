@@ -5,6 +5,7 @@ from pathlib import Path
 
 from observer.alignment import (
     AlignmentStability,
+    _attention_setup_timeout_message,
     _count_feature_observation,
     attention_session_baseline_from_samples,
     assess_alignment,
@@ -19,6 +20,7 @@ from observer.calibration import (
 from observer.cli import (
     ATTENTION_BOUNDARY_CUES,
     ATTENTION_MINUTE_CUES,
+    C_CLOSEOUT_HOLDOUT_CUES,
     GUIDED_DEBUG_CUES,
     _evidence_capture_kind,
     _finalize_debug_video,
@@ -72,6 +74,25 @@ def neutral_posture() -> FeatureVector:
 
 
 class AlignmentTests(unittest.TestCase):
+    def test_attention_setup_timeout_diagnostics_are_safe_and_ranked(self) -> None:
+        message = _attention_setup_timeout_message(
+            face_runs=12,
+            valid_frames=4,
+            longest_valid_seconds=1.25,
+            invalid_reason_counts={
+                "quality:blurred": 3,
+                "face_or_eyes_not_observable": 8,
+            },
+        )
+
+        self.assertIn("face_runs=12", message)
+        self.assertIn("valid_frames=4", message)
+        self.assertIn("longest_valid=1.25s", message)
+        self.assertLess(
+            message.index("face_or_eyes_not_observable=8"),
+            message.index("quality:blurred=3"),
+        )
+
     def test_feature_diagnostics_distinguish_missing_rejected_and_observable(self) -> None:
         counts = {}
         _count_feature_observation(counts, None, 1)
@@ -120,6 +141,23 @@ class AlignmentTests(unittest.TestCase):
         self.assertEqual(args.debug_video, Path("data/debug/test.mp4"))
         self.assertTrue(args.guided_debug_cues)
 
+    def test_yolo_replay_exposes_uniform_frame_sampling(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "yolo-replay",
+                "--video",
+                "input.mp4",
+                "--model",
+                "model.onnx",
+                "--output",
+                "report.json",
+                "--sample-frames",
+                "16",
+            ]
+        )
+
+        self.assertEqual(args.sample_frames, 16)
+
     def test_guided_debug_cues_have_objective_action_durations(self) -> None:
         self.assertEqual(_guided_debug_cue(219.9)[0], "normal_1")
         cue_id, instruction, remaining = _guided_debug_cue(220.0)
@@ -167,6 +205,25 @@ class AlignmentTests(unittest.TestCase):
         self.assertEqual(
             _guided_case_metadata("score_a02")["expected_state"], "violation"
         )
+
+    def test_closeout_holdout_plan_is_fixed_and_contains_no_model_feedback(self) -> None:
+        args = build_parser().parse_args(
+            ["vision-smoke", "--guided-debug-plan", "c-closeout-holdout"]
+        )
+
+        self.assertEqual(args.guided_debug_plan, "c-closeout-holdout")
+        self.assertEqual(C_CLOSEOUT_HOLDOUT_CUES[-1][1], 144.0)
+        self.assertEqual(_guided_debug_cue(15.0, C_CLOSEOUT_HOLDOUT_CUES)[0], "h02_away")
+        self.assertEqual(_guided_debug_cue(60.0, C_CLOSEOUT_HOLDOUT_CUES)[0], "h04_phone")
+        self.assertEqual(
+            _guided_debug_cue(121.0, C_CLOSEOUT_HOLDOUT_CUES)[0],
+            "h08_camera_cover",
+        )
+        instructions = " ".join(cue[3].upper() for cue in C_CLOSEOUT_HOLDOUT_CUES)
+        self.assertNotIn("COMPLIANT", instructions)
+        self.assertNotIn("VIOLATION", instructions)
+        self.assertNotIn("TARGET READY", instructions)
+        self.assertIn("NO FACE, SHOULDER, ARM, OR TORSO", instructions)
 
     def test_attention_boundary_summary_excludes_preparation_and_keeps_exact_runs(self) -> None:
         summaries = {}

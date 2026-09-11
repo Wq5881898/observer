@@ -12,13 +12,13 @@ Observer 是一个本地优先的专注与坐姿辅助程序。它使用电脑�
 
 ## 当前状态
 
-项目已完成预研、技术地基和阶段 C 的可测试实现。Python 3.11 隔离环境、DirectShow 摄像头最新帧采集、资源预算监控、MediaPipe Face/Pose 和 EfficientDet-Lite0 分频推理已经在目标电脑上运行通过；实测结果见 [第一阶段技术验证记录](docs/phase-1-technical-validation.md)。统一 Observation、手机/手腕几何融合、持续违规状态机、提醒动作和可扩展扣分账本也已完成，见 [第二阶段规则核心记录](docs/phase-2-rule-engine.md)。阶段 C 的质量门、个人姿势基线、9 点屏幕注意力校准、环境指纹、手机候选升频/确认、隔离验证批次和指标报告已经实现，当前等待用户参与真实校准、tuning、holdout 与 60 分钟验收，不能提前宣称阶段通过。
+项目已完成预研、技术地基，阶段 C 已通过并关闭。Python 3.11 隔离环境、DirectShow 摄像头最新帧采集、资源预算监控、MediaPipe Face/Pose、YOLO11n 单类手机检测和 EfficientDet 人物补充探针已经在目标电脑上运行；两轮自然短测、冻结后离席/手机事件链、最终最小盲测及 60 分钟无录像自然长测均已完成。长测运行 `3599.985` 秒、采集 `45,615` 帧且零读取失败，CPU 平均 `12.51%`、P95 `16.79%`、内存峰值 `403.92 MB`、估算增长 `18.61 MB/小时`，均在阶段预算内。实测、失败记录和限制见 [C 收尾核查](docs/phase-c-closeout-audit-20260909.md)，复杂度取舍见 [C 复杂度与止损评审](docs/phase-c-complexity-review-20260910.md)。注意力、姿态和人体工学只作为软提醒，不进入效率扣分。
 
 技术边界和整体路线见 [可行性研究](docs/feasibility-study.md)，各模块决策见 [完整技术选型对比](docs/technology-selection.md)，当前电脑适配与运行开销要求见 [成熟度、硬件与性能评估](docs/maturity-hardware-performance.md)。
 
 大阶段、门控和当前状态见 [总体阶段计划](docs/master-plan.md)。阶段 C 按 [阶段 C 基准](docs/phase-c-baseline.md)、[校准与验证协议](docs/phase-c-validation-protocol.md)、[真实验证运行手册](docs/phase-c-runbook.md) 和 [设计到真实验证交接](docs/phase-c-validation-handoff.md) 实施；真实数据将同时评价准确率和设计是否过度。
 
-手机检测默认使用 MediaPipe EfficientDet-Lite0 int8。只有它在真实使用场景中达不到手机手持事件验收线时，才评估 YOLO11n ONNX/OpenVINO；正式运行不会同时执行两个物体检测模型。
+阶段 C 冻结候选使用本地 YOLO11n ONNX 单类模型检测清晰可见的手机，并以低频 EfficientDet `person` 探针保留遮脸在席能力。极低露边或严重遮挡手机允许漏检或无法判断，不为这些边界继续扩大训练。冻结模型身份和 SHA-256 见 [模型目录说明](models/yolo/README.md)。
 
 ## 已确定的产品原则
 
@@ -34,10 +34,21 @@ Observer 是一个本地优先的专注与坐姿辅助程序。它使用电脑�
 
 先完成 Windows 单用户、单主屏、单摄像头 MVP：个人校准、任务日程、自动开始观察、手机持续手持检测、可扩展扣分规则、分级提醒、事件证据、会话报告和本地数据管理。精确注视点、多显示器、云同步和医学级姿势判断不进入第一版。
 
-## 开发与验证
+## 极简桌面窗口
 
 ```powershell
-uv sync --python 3.11
+uv sync --extra desktop --extra yolo
+.\.venv\Scripts\python.exe -m observer product --data-dir data/product-demo gui --demo
+```
+
+模拟模式不使用摄像头。真实运行用 `python -m observer product gui`；若存在 `data/calibration/default.json` 会自动启用个人校准，否则界面明确显示仅启用离席与可见手机。任务名、时长、开始时间、暂停/结束和历史摘要都在一个窗口内；软提醒会发出系统提示音并闪烁任务栏。详见 [使用说明](docs/phase-d-runbook.md)。
+
+## 开发与验证
+
+D 阶段已打通可运行的极简垂直切片：单次任务、会话开始/暂停/结束、SQLite 历史摘要、截图开关与记录删除。它用于验证整体方向，不代表D主体或阶段接近完成。也可用 `python -m observer product run --demo` 在不打开摄像头的情况下体验；真实模式需安装 `yolo` 依赖并具有冻结模型。具体命令见 [D 阶段使用说明](docs/phase-d-runbook.md)，当前进度和后续建设见 [D 实施检查点](docs/phase-d-implementation-checkpoint-20260910.md)。
+
+```powershell
+uv sync --python 3.11 --extra yolo
 .\.venv\Scripts\python.exe -m observer doctor
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -m observer camera-smoke --seconds 15

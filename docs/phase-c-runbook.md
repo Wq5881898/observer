@@ -1,10 +1,13 @@
 # Observer 阶段 C 真实校准与验证运行手册
 
-版本：0.1
-日期：2026-08-30
-状态：实现交接完成；等待项目所有者参与执行
+版本：0.2
+日期：2026-09-10
+状态：历史完整运行手册；阶段 C 已通过并关闭
 
-正式收尾测试不再直接穷举本手册中的所有早期 tuning 场景。测试优先级、两个独立循环、盲测要求和停止规则见 `docs/phase-c-formal-test-plan.md`。
+正式收尾测试不再直接穷举本手册中的所有早期 tuning 场景。当前冻结方案、已完成
+证据和仅剩门槛见 `docs/phase-c-window-handoff.md`；复杂度止损结论见
+`docs/phase-c-complexity-review-20260910.md`。本手册其余命令用于历史复现，不表示
+仍需逐项执行。
 
 ## 1. 这一步为什么必须有人参与
 
@@ -194,6 +197,41 @@ trial 分类通过后，必须让同一个规则引擎跨场景连续运行，�
 
 距离分为三档：本轮会话设置时的自然舒适距离；比自然距离明显更近但完整脸和双眼仍在画面中的近距离；以及当前校准档案对应的远距离，目标脸尺度约为 `0.270`，不要求退到眼睛无法检测。当前 17 点及 8 个独立验证点无需重做，它们仍是同一摄像头/屏幕环境下的坐标锚点；P0-A 只用中心和左右下边界代表点检查距离泛化。若远距离或近距离代表点失败，才建立该距离的专项网格，不预先重复三套 17 点校准。
 
+手机正式基线只保留核心回归；单手低位、双手正常和极低露边属于显式专项，不进入默认两轮协议。B02 在当前取景看不到桌面手机时记 N/A；B03 高相似非手机物品是已批准保留项，不得把已知误报告作失败反例或通过证据。
+
+```powershell
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals phone_held,attention_away --scenarios phone_baseline_b01_natural_no_phone,phone_baseline_b04_one_hand_phone,phone_baseline_b05_recovery,phone_baseline_b06_two_hands_low,phone_baseline_b07_recovery,phone_baseline_b08_phone_out_of_frame,attention_baseline_b08_look_off_screen,phone_baseline_b09_final --output-root data/formal/phone-baseline-core --debug-trial-videos
+```
+
+只有当手机检测模型、训练数据或检测门槛变化时，才运行下列显式专项；不要在每轮正式基线中重复：
+
+```powershell
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals phone_held --scenarios phone_baseline_b10_one_hand_low,phone_baseline_b10_recovery,phone_baseline_b11_two_hands_normal,phone_baseline_b11_recovery,phone_baseline_b12_one_hand_edge,phone_baseline_b12_recovery,phone_baseline_b13_two_hands_edge,phone_baseline_b13_recovery --output-root data/formal/phone-visibility-matrix --debug-trial-videos
+```
+
+本轮新增的 `phone_edge_e01`～`e04` 是独立的手机边缘检测诊断用例，不修改、不替代 B01～B13，也不得进入 holdout。四个位置分别是：屏幕正下方中央、左下、右下、屏幕上方边缘；每个正例保持 12 秒，随后完成对应 8 秒 recovery。四个位置应尽量保持相同手机露出比例，脸部距离、头部方向、手机型号和摄像头位置保持不变。
+
+以下是历史参数筛选矩阵；最终正式默认值已经冻结为 `0.25 / 2.0 / 0.18`。历史各组仍按当时参数保留，不得回写结果。每组使用独立输出目录，避免不同参数的录像和报告混在一起：
+
+```powershell
+# P0_control: 0.25 / 1.5s / 0.18
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals phone_held --scenarios phone_edge_e01_bottom_center,phone_edge_e01_bottom_center_recovery,phone_edge_e02_bottom_left,phone_edge_e02_bottom_left_recovery,phone_edge_e03_bottom_right,phone_edge_e03_bottom_right_recovery,phone_edge_e04_top_edge,phone_edge_e04_top_edge_recovery --output-root data/formal/phone-edge/P0-control --debug-trial-videos --phone-score-threshold 0.25 --phone-retain-seconds 1.5 --phone-center-distance 0.18
+
+# P1_medium_recall: 0.15 / 1.5s / 0.18
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals phone_held --scenarios phone_edge_e01_bottom_center,phone_edge_e01_bottom_center_recovery,phone_edge_e02_bottom_left,phone_edge_e02_bottom_left_recovery,phone_edge_e03_bottom_right,phone_edge_e03_bottom_right_recovery,phone_edge_e04_top_edge,phone_edge_e04_top_edge_recovery --output-root data/formal/phone-edge/P1-medium-recall --debug-trial-videos --phone-score-threshold 0.15 --phone-retain-seconds 1.5 --phone-center-distance 0.18
+
+# P2_low_threshold_continuity: 0.10 / 2.2s / 0.18
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals phone_held --scenarios phone_edge_e01_bottom_center,phone_edge_e01_bottom_center_recovery,phone_edge_e02_bottom_left,phone_edge_e02_bottom_left_recovery,phone_edge_e03_bottom_right,phone_edge_e03_bottom_right_recovery,phone_edge_e04_top_edge,phone_edge_e04_top_edge_recovery --output-root data/formal/phone-edge/P2-low-threshold-continuity --debug-trial-videos --phone-score-threshold 0.10 --phone-retain-seconds 2.2 --phone-center-distance 0.18
+
+# P3_low_threshold_wide_tracking: 0.10 / 2.2s / 0.30
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals phone_held --scenarios phone_edge_e01_bottom_center,phone_edge_e01_bottom_center_recovery,phone_edge_e02_bottom_left,phone_edge_e02_bottom_left_recovery,phone_edge_e03_bottom_right,phone_edge_e03_bottom_right_recovery,phone_edge_e04_top_edge,phone_edge_e04_top_edge_recovery --output-root data/formal/phone-edge/P3-low-threshold-wide-tracking --debug-trial-videos --phone-score-threshold 0.10 --phone-retain-seconds 2.2 --phone-center-distance 0.30
+
+# P4_medium_threshold_wide_tracking: 0.15 / 2.2s / 0.30
+.\.venv\Scripts\python.exe -m observer validate-live --models-dir models --profile data/calibration/default.json --role tuning --signals phone_held --scenarios phone_edge_e01_bottom_center,phone_edge_e01_bottom_center_recovery,phone_edge_e02_bottom_left,phone_edge_e02_bottom_left_recovery,phone_edge_e03_bottom_right,phone_edge_e03_bottom_right_recovery,phone_edge_e04_top_edge,phone_edge_e04_top_edge_recovery --output-root data/formal/phone-edge/P4-medium-threshold-wide-tracking --debug-trial-videos --phone-score-threshold 0.15 --phone-retain-seconds 2.2 --phone-center-distance 0.30
+```
+
+每组参数先只做一遍，不重复原有 B 基线。比较时同时看手机正例召回、最长连续 violation、首次检出延迟、恢复段误报比例和恢复段最长假事件。只有同时满足“正例至少 90% violation 且连续至少 10 秒、恢复段 violation 不超过 10% 且假事件小于 2.5 秒”的参数，才允许进入下一轮露出比例边界测试；诊断结果不能直接修改正式参数。
+
 交互基线通过、标准争议关闭并冻结算法后，才生成正式连续脚本。整组启动前一次性确认动作顺序和停止条件，运行中不显示黄/绿、`CURRENT` 或实时得分，不要求再次按键；程序独立跑完后统一分析。动作切换窗口预先写入脚本，转换帧不计入稳定段。两个 5 分钟自然循环也采用同样的“开始前确认一次、中间不干扰”原则。
 
 以下命令仅是旧 pilot 的复现命令，不得原样用于新的正式连续基线：
@@ -231,3 +269,45 @@ trial 分类通过后，必须让同一个规则引擎跨场景连续运行，�
 ```
 
 阶段 C 结果只能是通过、有条件通过或返工；真实指标缺失时保持“实施中”，不能用自动化测试数量代替。
+
+## 8. 当前最终最小盲测入口（已完成，保留复现）
+
+历史大矩阵已停止扩展。最终固定 144 秒硬信号盲测已经完成；需要复现时使用：
+
+```powershell
+.\scripts\run_c_minimal_holdout.ps1
+```
+
+该脚本固定使用冻结模型 `models/yolo/observer-phone-s304-e2b.onnx`，依次覆盖：
+
+1. 正常在席、无手机；
+2. 完全离开取景范围 25 秒；
+3. 返回恢复；
+4. 清晰完整手机自然手持 15 秒；
+5. 放下手机恢复；
+6. 用空白纸遮脸但保留躯干可见；
+7. 去除遮挡恢复；
+8. 完全遮住摄像头；
+9. 最终恢复。
+
+转换窗口不计分。界面只显示预先写定的动作和剩余时间，不显示模型状态、阈值、
+黄绿准备标记或得分，测试者不得根据模型输出迎合动作。脚本临时保存完整本地录像、
+逐帧 trace、有限证据和报告，供测试后确认动作真值；这些文件不是日常运行配置。
+
+结束后 `holdout-audit.json` 自动检查持续比例与连续时间，但其中
+`eligible_for_acceptance` 固定为 `false`。只有测试者人工确认每个计分窗口的动作
+自然、正确且持续完整，并把确认写入阶段 C 审计文档后，才可把本轮计为有效
+holdout。自动通过但动作真值不成立时整轮无效；算法失败时保留该独立失败证据，
+只分析对应最小场景，不得把本轮改名为 tuning 后反复调参。
+
+长测仍使用：
+
+```powershell
+.\scripts\run_c_natural_recheck.ps1 -Seconds 3600
+```
+
+最终有效批次为
+`data/formal/c-closeout/minimal-holdout/20260910-221353-3e408b17`，自动检查12/12
+通过并完成人工真值复核。首次失败/无效输入批次继续保留，不得覆盖。当前未具备
+长测当时因环境限制后置，现已由正式批次 `20260910-234159-098b5ab5` 完成并通过；
+不得为追求更漂亮指标重复运行。

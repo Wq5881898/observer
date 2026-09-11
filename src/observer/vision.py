@@ -11,9 +11,13 @@ from observer.calibration import AttentionSessionBaseline, CalibrationProfile
 from observer.config import InferenceConfig
 from observer.fusion import ObservationFusion
 from observer.models import ModelFiles
+from observer.object_detection import (
+    MediaPipeEfficientDetBackend,
+    ObjectDetectorBackend,
+    is_phone_class_name,
+)
 from observer.observations import (
     NormalizedBox,
-    NormalizedPoint,
     Observation,
     PhoneCandidate,
     SignalValue,
@@ -90,10 +94,21 @@ class MediapipeVisionProbe:
         models: ModelFiles,
         rates: InferenceConfig,
         calibration: CalibrationProfile | None = None,
+        *,
+        phone_score_threshold: float = 0.25,
+        phone_retain_seconds: float = 2.0,
+        phone_center_distance: float = 0.18,
+        object_backend: ObjectDetectorBackend | None = None,
     ) -> None:
         import mediapipe as mp
         from mediapipe.tasks.python import vision
 
+        if not 0.0 <= phone_score_threshold <= 1.0:
+            raise ValueError("phone score threshold must be between 0 and 1")
+        if phone_retain_seconds < 0:
+            raise ValueError("phone retain seconds must be non-negative")
+        if phone_center_distance < 0:
+            raise ValueError("phone center distance must be non-negative")
         self._mp = mp
         self._rates = rates
         mode = vision.RunningMode.VIDEO
@@ -117,15 +132,39 @@ class MediapipeVisionProbe:
                 output_segmentation_masks=False,
             )
         )
-        self._object = vision.ObjectDetector.create_from_options(
-            vision.ObjectDetectorOptions(
-                base_options=mp.tasks.BaseOptions(model_asset_path=str(models.object)),
-                running_mode=mode,
-                max_results=4,
-                score_threshold=0.25,
-                category_allowlist=["cell phone", "person"],
+        if object_backend is None:
+            object_detector = vision.ObjectDetector.create_from_options(
+                vision.ObjectDetectorOptions(
+                    base_options=mp.tasks.BaseOptions(model_asset_path=str(models.object)),
+                    running_mode=mode,
+                    max_results=4,
+                    score_threshold=phone_score_threshold,
+                    category_allowlist=["cell phone", "person"],
+                )
             )
-        )
+            object_backend = MediaPipeEfficientDetBackend(
+                mp_module=mp,
+                detector=object_detector,
+            )
+        self._object = object_backend
+        # Preserve the original person evidence when the phone model has
+        # no person class. Run this existing lightweight model at most 1 Hz,
+        # independently of phone burst inference; never recycle stale hits.
+        self._person_detector = None
+        self._next_person_due = 0.0
+        if not getattr(object_backend, 'supports_person_detection', False):
+            person_detector = vision.ObjectDetector.create_from_options(
+                vision.ObjectDetectorOptions(
+                    base_options=mp.tasks.BaseOptions(model_asset_path=str(models.object)),
+                    running_mode=mode,
+                    max_results=4,
+                    score_threshold=0.25,
+                    category_allowlist=['person'],
+                )
+            )
+            self._person_detector = MediaPipeEfficientDetBackend(
+                mp_module=mp, detector=person_detector, category_allowlist=('person',)
+            )
         self._next_due = {"face": 0.0, "pose": 0.0, "object": 0.0}
         self.measurements = VisionProbeMeasurements()
         self._fusion = ObservationFusion()
@@ -151,9 +190,14 @@ class MediapipeVisionProbe:
         self._last_person_count = 0
         self._last_raw_person_count = 0
         self._person_tracker = PresenceHitTracker(confirmation_hits=2)
-        self._phone_tracker = PhoneCandidateTracker()
+        self._phone_tracker = PhoneCandidateTracker(
+            retain_seconds=phone_retain_seconds,
+            maximum_center_distance=phone_center_distance,
+        )
 
     def close(self) -> None:
+        if self._person_detector is not None:
+            self._person_detector.close()
         self._object.close()
         self._pose.close()
         self._face.close()
@@ -232,18 +276,9 @@ class MediapipeVisionProbe:
             count = len(result.pose_landmarks)
             self.measurements.maximum_poses = max(self.measurements.maximum_poses, count)
             self.measurements.pose.record(count > 0, elapsed)
-            wrists: tuple[NormalizedPoint, ...] = ()
             pose = None
             if count > 0:
                 pose = result.pose_landmarks[0]
-                wrists = tuple(
-                    NormalizedPoint(
-                        x=self._clamp(pose[index].x),
-                        y=self._clamp(pose[index].y),
-                        visibility=self._clamp(pose[index].visibility or 0.0),
-                    )
-                    for index in (15, 16)
-                )
             face_is_fresh = (
                 self._latest_face_at is not None
                 and 0 <= now_monotonic - self._latest_face_at <= 0.75
@@ -259,7 +294,6 @@ class MediapipeVisionProbe:
             self._fusion.update_pose(
                 now_monotonic,
                 count,
-                wrists,
                 presence_credible=self._last_pose_presence_credible,
             )
             self._latest_pose_at = now_monotonic
@@ -292,51 +326,51 @@ class MediapipeVisionProbe:
             self._next_due["pose"] = now_monotonic + 1.0 / self._rates.pose_fps
 
         if due["object"]:
-            started = time.perf_counter()
-            result = self._object.detect_for_video(image, timestamp_ms)
-            elapsed = (time.perf_counter() - started) * 1000
+            detections = self._object.detect(bgr_frame, timestamp_ms)
+            elapsed = float(
+                getattr(
+                    self._object,
+                    "last_latency_ms",
+                    max((detection.latency_ms for detection in detections), default=0.0),
+                )
+            )
+            person_updated = getattr(self._object, 'supports_person_detection', False)
+            if self._person_detector is not None and now_monotonic >= self._next_person_due:
+                person_detections = self._person_detector.detect(bgr_frame, timestamp_ms)
+                detections = (*detections, *person_detections)
+                elapsed += self._person_detector.last_latency_ms
+                self._next_person_due = now_monotonic + 1.0
+                person_updated = True
             phone_count = 0
             person_count = 0
             phones: list[PhoneCandidate] = []
-            frame_height, frame_width = bgr_frame.shape[:2]
-            for detection in result.detections:
-                person_count += int(
-                    any(
-                        category.category_name == "person"
-                        for category in detection.categories
-                    )
-                )
-                phone_categories = [
-                    category
-                    for category in detection.categories
-                    if category.category_name == "cell phone"
-                ]
-                if not phone_categories:
+            for detection in detections:
+                person_count += int(detection.class_name == "person")
+                if not is_phone_class_name(detection.class_name):
                     continue
                 phone_count += 1
-                box = detection.bounding_box
-                left = self._clamp(box.origin_x / frame_width)
-                top = self._clamp(box.origin_y / frame_height)
-                right = self._clamp((box.origin_x + box.width) / frame_width)
-                bottom = self._clamp((box.origin_y + box.height) / frame_height)
                 phones.append(
                     PhoneCandidate(
-                        NormalizedBox(left, top, right - left, bottom - top),
-                        confidence=max(category.score or 0.0 for category in phone_categories),
+                        detection.box,
+                        confidence=detection.confidence,
                     )
                 )
             self.measurements.phone_detections += phone_count
             self.measurements.person_detections += person_count
             self.measurements.object.record(phone_count > 0 or person_count > 0, elapsed)
             tracked_phones = self._phone_tracker.update(now_monotonic, phones)
-            confirmed_person_count = self._person_tracker.update(person_count)
+            confirmed_person_count = self._last_person_count
+            if person_updated:
+                confirmed_person_count = self._person_tracker.update(person_count)
             self._latest_object_at = now_monotonic
             self._last_raw_phones = tuple(phones)
             self._last_tracked_phones = tracked_phones
-            self._last_raw_person_count = person_count
+            if person_updated:
+                self._last_raw_person_count = person_count
             self._last_person_count = confirmed_person_count
             self._fusion.update_phones(now_monotonic, tracked_phones)
-            self._fusion.update_person_presence(now_monotonic, confirmed_person_count)
+            if person_updated:
+                self._fusion.update_person_presence(now_monotonic, confirmed_person_count)
             object_fps = (
                 self._rates.object_burst_fps
                 if self._phone_tracker.burst_active(now_monotonic)

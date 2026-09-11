@@ -38,15 +38,19 @@
       "rule_id": "attention_away",
       "signal_name": "attention_away",
       "trigger_after_seconds": 8.0,
-      "initial_penalty_points": 3.0,
-      "maximum_penalty_points": 15.0
+      "alert_cooldown_seconds": 300.0,
+      "initial_penalty_points": 0.0,
+      "repeat_penalty_points": 0.0,
+      "maximum_penalty_points": 0.0
     },
     {
       "rule_id": "posture_deviation",
       "signal_name": "posture_deviation",
       "trigger_after_seconds": 20.0,
-      "initial_penalty_points": 2.0,
-      "maximum_penalty_points": 10.0
+      "alert_cooldown_seconds": 300.0,
+      "initial_penalty_points": 0.0,
+      "repeat_penalty_points": 0.0,
+      "maximum_penalty_points": 0.0
     },
     {
       "rule_id": "ergonomic_risk",

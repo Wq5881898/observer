@@ -120,14 +120,16 @@ ATTENTION_CONTEXT_SCALE_FLOORS: Mapping[str, float] = {
 
 # Head proxies are normalized by facial geometry. They supplement iris gaze
 # only after a neutral baseline has been captured in the same camera session.
-ATTENTION_HEAD_YAW_DELTA_THRESHOLD = 0.22
-ATTENTION_HEAD_YAW_FUSION_THRESHOLD = 0.30
+ATTENTION_HEAD_YAW_DELTA_THRESHOLD = 0.20
+# Coarse head eligibility and its coordinate compensation must share a gate.
+# Otherwise eligible turns in [0.22, 0.30) use uncompensated face-local gaze.
+ATTENTION_HEAD_YAW_FUSION_THRESHOLD = ATTENTION_HEAD_YAW_DELTA_THRESHOLD
 # Convert the same-session yaw proxy into approximate screen-width units so
 # horizontal iris regression is interpreted in world/screen coordinates rather
 # than face-local coordinates.  Paired live controls (head turned while eyes
 # remain on centre versus head and eyes moving together) support a factor near
 # 2.0 in both directions without changing the calibrated screen boundary.
-ATTENTION_HEAD_YAW_SCREEN_CORRECTION = 2.0
+ATTENTION_HEAD_YAW_SCREEN_CORRECTION = 2.50
 ATTENTION_HEAD_PITCH_DOWN_DELTA_THRESHOLD = 0.07
 ATTENTION_HEAD_PITCH_STRONG_DOWN_DELTA_THRESHOLD = 0.14
 ATTENTION_GAZE_DOWN_BOUNDARY = 1.0
@@ -136,6 +138,10 @@ ATTENTION_GAZE_DOWN_BOUNDARY = 1.0
 # (false-positive median about -0.10). Keep the vertical calibration margin
 # unchanged and give only the noisier horizontal iris estimate this guard.
 ATTENTION_HORIZONTAL_GAZE_MARGIN = 0.15
+# Once the head already meets the coarse-away gate, require only a small
+# beyond-screen margin from the fused gaze. This is deliberately separate
+# from the wider fine-gaze guard above: fine gaze alone remains soft evidence.
+ATTENTION_COARSE_GAZE_AGREEMENT_MARGIN = 0.00
 
 
 def attention_down_evidence_matches(
@@ -463,6 +469,10 @@ class AttentionCalibration:
             "head_yaw_proxy",
             "head_pitch_proxy",
         }.issubset(features.values):
+            if gaze_signal.state is SignalState.VIOLATION:
+                return SignalValue.unknown(
+                    'fine gaze outside without coarse head evidence', **gaze_signal.metrics
+                )
             return gaze_signal
 
         yaw_delta = features.values["head_yaw_proxy"] - baseline.head_yaw_proxy
@@ -503,8 +513,14 @@ class AttentionCalibration:
         )
         horizontal_head_away = yaw_ratio >= 1.0
         horizontal_gaze_agrees = fused_screen_x is not None and (
-            (yaw_delta > 0 and fused_screen_x < -horizontal_margin)
-            or (yaw_delta < 0 and fused_screen_x > 1.0 + horizontal_margin)
+            (
+                yaw_delta > 0
+                and fused_screen_x < -ATTENTION_COARSE_GAZE_AGREEMENT_MARGIN
+            )
+            or (
+                yaw_delta < 0
+                and fused_screen_x > 1.0 + ATTENTION_COARSE_GAZE_AGREEMENT_MARGIN
+            )
         )
         head_gaze_conflict = (
             horizontal_head_away
@@ -522,12 +538,11 @@ class AttentionCalibration:
                 **metrics,
             )
         head_or_directional_gaze_away = (
-            horizontal_gaze_away
+            (horizontal_head_away and horizontal_gaze_agrees)
             # Preserve the head-only safety fallback only when iris gaze is
             # genuinely unavailable.  When iris is observable, a large head
             # turn must not override eye compensation back to the screen.
             or (screen_x is None and yaw_ratio >= 1.0)
-            or upward_gaze_away
             or down_away
         )
         if head_or_directional_gaze_away:
@@ -539,6 +554,10 @@ class AttentionCalibration:
                 1.0, 0.55 + 0.25 * (max(yaw_ratio, pitch_ratio) - 1.0)
             )
             return SignalValue.violation(confidence=confidence, **metrics)
+        if horizontal_gaze_away or upward_gaze_away:
+            return SignalValue.unknown(
+                'fine gaze outside without coarse head agreement', **metrics
+            )
         if gaze_signal.state is SignalState.COMPLIANT:
             return SignalValue.compliant(gaze_signal.confidence, **metrics)
         if gaze_signal.state is SignalState.VIOLATION:

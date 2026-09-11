@@ -163,20 +163,22 @@ class SustainedRule:
             self._violation_seconds + self.config.repeat_penalty_interval_seconds
         )
         self._next_alert_at = now + self.config.alert_cooldown_seconds
-        return [
+        actions = [
             self._action(ActionKind.ACTIVATED, now),
             self._action(ActionKind.ALERT, now),
-            self._action(
+        ]
+        if self.config.initial_penalty_points > 0:
+            actions.append(self._action(
                 ActionKind.PENALTY,
                 now,
                 requested_points=self.config.initial_penalty_points,
-            ),
-        ]
+            ))
+        return actions
 
     def _due_actions(self, now: float) -> list[RuleAction]:
         actions: list[RuleAction] = []
         interval = self.config.repeat_penalty_interval_seconds
-        if interval > 0:
+        if interval > 0 and self.config.repeat_penalty_points > 0:
             while self._violation_seconds >= self._next_penalty_seconds:
                 actions.append(
                     self._action(
@@ -251,15 +253,19 @@ def default_rule_configs() -> tuple[RuleConfig, ...]:
             "attention_away",
             "attention_away",
             trigger_after_seconds=8.0,
-            initial_penalty_points=3.0,
-            maximum_penalty_points=15.0,
+            alert_cooldown_seconds=300.0,
+            initial_penalty_points=0.0,
+            repeat_penalty_points=0.0,
+            maximum_penalty_points=0.0,
         ),
         RuleConfig(
             "posture_deviation",
             "posture_deviation",
             trigger_after_seconds=20.0,
-            initial_penalty_points=2.0,
-            maximum_penalty_points=10.0,
+            alert_cooldown_seconds=300.0,
+            initial_penalty_points=0.0,
+            repeat_penalty_points=0.0,
+            maximum_penalty_points=0.0,
         ),
         RuleConfig(
             "ergonomic_risk",

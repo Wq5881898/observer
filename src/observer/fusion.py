@@ -3,12 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from observer.observations import (
-    NormalizedPoint,
     Observation,
     PhoneCandidate,
     SignalState,
     SignalValue,
-    phone_held_signal,
+    phone_visible_signal,
 )
 
 
@@ -34,10 +33,10 @@ class ObservationFusion:
         self._face_count = 0
         self._pose_at: float | None = None
         self._pose_count = 0
-        self._wrists: tuple[NormalizedPoint, ...] = ()
         self._object_at: float | None = None
         self._phones: tuple[PhoneCandidate, ...] = ()
         self._person_count = 0
+        self._person_at: float | None = None
         self._attention_at: float | None = None
         self._attention = SignalValue.unknown("attention calibration not available")
         self._posture_at: float | None = None
@@ -60,13 +59,11 @@ class ObservationFusion:
         self,
         at_monotonic: float,
         pose_count: int,
-        wrists: tuple[NormalizedPoint, ...],
         *,
         presence_credible: bool = True,
     ) -> None:
         self._pose_at = at_monotonic
         self._pose_count = max(0, pose_count) if presence_credible else 0
-        self._wrists = wrists if self._pose_count > 0 else ()
 
     def update_phones(
         self, at_monotonic: float, phones: tuple[PhoneCandidate, ...]
@@ -75,7 +72,7 @@ class ObservationFusion:
         self._phones = phones
 
     def update_person_presence(self, at_monotonic: float, person_count: int) -> None:
-        self._object_at = at_monotonic
+        self._person_at = at_monotonic
         self._person_count = max(0, person_count)
 
     def update_attention(self, at_monotonic: float, signal: SignalValue) -> None:
@@ -101,6 +98,9 @@ class ObservationFusion:
         object_fresh = self._is_fresh(
             self._object_at, now_monotonic, self.freshness.object_seconds
         )
+        person_fresh = self._is_fresh(
+            self._person_at, now_monotonic, self.freshness.object_seconds
+        )
         attention_fresh = self._is_fresh(
             self._attention_at, now_monotonic, self.freshness.attention_seconds
         )
@@ -118,10 +118,10 @@ class ObservationFusion:
         elif (
             (face_fresh and self._face_count > 0)
             or (pose_fresh and self._pose_count > 0)
-            or (object_fresh and self._person_count > 0)
+            or (person_fresh and self._person_count > 0)
         ):
             away = SignalValue.compliant(confidence=1.0)
-        elif face_fresh and pose_fresh and object_fresh:
+        elif face_fresh and pose_fresh and person_fresh:
             away = SignalValue.violation(confidence=1.0)
         else:
             away = SignalValue.unknown(
@@ -132,18 +132,8 @@ class ObservationFusion:
             phone_held = SignalValue.unknown(self._quality_reason)
         elif not object_fresh:
             phone_held = SignalValue.unknown("phone detector result is stale")
-        elif not self._phones:
-            visible_wrists = tuple(wrist for wrist in self._wrists if wrist.visibility >= 0.5)
-            if pose_fresh and self._pose_count > 0 and visible_wrists:
-                phone_held = phone_held_signal((), visible_wrists)
-            else:
-                phone_held = SignalValue.unknown(
-                    "no phone is visible but hands are outside the observable area"
-                )
-        elif not pose_fresh:
-            phone_held = SignalValue.unknown("phone visible but pose result is stale")
         else:
-            phone_held = phone_held_signal(self._phones, self._wrists)
+            phone_held = phone_visible_signal(self._phones)
 
         if quality_fresh and not self._quality_observable:
             attention = SignalValue.unknown(self._quality_reason)
