@@ -1,5 +1,7 @@
 # Observer 第二阶段：Observation 与规则核心
 
+> 历史定位：本文件记录通用规则状态机和当时的固定分值实验。通用状态机仍保留；D产品新会话已经改为合并专注事件和时间比例评分，见 `phase-d-focus-scoring-requirements-20260916.md`。旧会话继续使用本阶段账本语义。
+
 日期：2026-08-29  
 状态：核心实现完成，29项自动化测试通过；真实手机正样本和校准功能待接入
 
@@ -99,4 +101,3 @@ clear → pending → active → recovering → clear
 3. 实现屏幕5/9点注意力校准，把头部和虹膜特征转换为 `attention_away`；
 4. 用SQLite持久化任务、会话、事件和扣分账本；
 5. 接入PySide6提醒和Agenda。
-

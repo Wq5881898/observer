@@ -1,0 +1,30 @@
+{
+  "frames_saved": false,
+  "baseline": {
+    "seconds": 15.016,
+    "new_frames": 192,
+    "brightness_mean": 140.206,
+    "read_failures_total": 0,
+    "last_error": null,
+    "opened": true
+  },
+  "switch_closed": {
+    "seconds": 15.016,
+    "new_frames": 160,
+    "brightness_mean": 36.773,
+    "read_failures_total": 0,
+    "last_error": null,
+    "opened": true
+  },
+  "recovery": {
+    "seconds": 12.016,
+    "new_frames": 148,
+    "brightness_mean": 144.503,
+    "read_failures_total": 0,
+    "last_error": null,
+    "opened": true
+  },
+  "classification": "physical_shutter_or_occlusion",
+  "recovered": true,
+  "camera_released": true
+}

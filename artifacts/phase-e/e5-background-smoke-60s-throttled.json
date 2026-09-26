@@ -1,0 +1,37 @@
+{
+  "requested_seconds": 60.0,
+  "profile": null,
+  "session_startup_seconds": 3.438,
+  "actual_seconds": 60.0,
+  "camera_released_after_end": true,
+  "exit_seconds": 0.516,
+  "runtime_lock_released": true,
+  "session_state": "ended",
+  "product_resources": {
+    "process_cpu_average_percent": 13.757692307692308,
+    "process_cpu_p95_percent": 16.875,
+    "process_memory_growth_mb_per_hour": null,
+    "process_memory_peak_mb": 454.25390625,
+    "sample_count": 13,
+    "sample_interval_seconds": 5.0,
+    "sampling_error": null,
+    "violations": [],
+    "within_budget": true
+  },
+  "samples": 60,
+  "cpu_average_percent": 14.807,
+  "cpu_p95_percent": 18.75,
+  "memory_peak_mb": 463.625,
+  "memory_growth_mb_per_hour": null,
+  "threads_start_end_peak": [
+    64,
+    64,
+    70
+  ],
+  "handles_start_end_peak": [
+    1106,
+    1147,
+    1172
+  ],
+  "within_cpu_memory_budget": true
+}

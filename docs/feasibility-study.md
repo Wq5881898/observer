@@ -1,5 +1,7 @@
 # Observer 预先研究与可行性分析
 
+> 历史定位：这是阶段A的方案与初始MVP基准。手机手持关系、固定/加权扣分和早期阈值后来经过真实验证与项目所有者决策调整；当前产品要求以 `master-plan.md`、`phase-d-development-plan.md` 和 `phase-d-focus-scoring-requirements-20260916.md` 为准。
+
 日期：2026-08-29  
 状态：技术路线建议，可用于进入 MVP 设计与实现
 

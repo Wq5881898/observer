@@ -148,6 +148,14 @@ class PerceptionTests(unittest.TestCase):
         self.assertEqual(tracker.update(3.1, ()), (phone,))
         self.assertEqual(tracker.update(3.3, ()), ())
 
+    def test_frozen_phone_retention_does_not_bridge_beyond_one_point_five_seconds(self) -> None:
+        tracker = PhoneCandidateTracker(confirmation_hits=2, retain_seconds=1.5)
+        phone = PhoneCandidate(NormalizedBox(0.4, 0.4, 0.1, 0.2), 0.9)
+        self.assertEqual(tracker.update(1.0, (phone,)), ())
+        self.assertEqual(tracker.update(1.2, (phone,)), (phone,))
+        self.assertEqual(tracker.update(2.699, ()), (phone,))
+        self.assertEqual(tracker.update(2.701, ()), ())
+
     def test_phone_tracker_does_not_abandon_track_for_remote_false_box(self) -> None:
         tracker = PhoneCandidateTracker(confirmation_hits=2)
         phone = PhoneCandidate(NormalizedBox(0.45, 0.75, 0.25, 0.2), 0.8)

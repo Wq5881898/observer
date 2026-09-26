@@ -4,11 +4,13 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 
 from observer.alignment import (
+    AlignmentCancelled,
     AlignmentStability,
     _attention_setup_timeout_message,
     _count_feature_observation,
     attention_session_baseline_from_samples,
     assess_alignment,
+    guide_attention_session_baseline,
 )
 from observer.calibration import (
     AttentionCalibration,
@@ -74,6 +76,15 @@ def neutral_posture() -> FeatureVector:
 
 
 class AlignmentTests(unittest.TestCase):
+    def test_headless_attention_setup_can_cancel_without_opening_preview(self) -> None:
+        with self.assertRaisesRegex(AlignmentCancelled, "session setup cancelled"):
+            guide_attention_session_baseline(
+                object(),
+                object(),
+                show_preview=False,
+                cancelled=lambda: True,
+            )
+
     def test_attention_setup_timeout_diagnostics_are_safe_and_ranked(self) -> None:
         message = _attention_setup_timeout_message(
             face_runs=12,

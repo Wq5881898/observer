@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Callable
 
 from observer.config import CameraConfig
 from observer.frames import LatestFrameBuffer
@@ -33,18 +33,27 @@ class CameraWorker:
         self._stats_lock = threading.Lock()
         self._stats = CameraStats()
 
-    def start(self, wait_seconds: float = 12.0) -> bool:
+    def start(self, wait_seconds: float = 12.0,
+              cancelled: Callable[[], bool] | None = None) -> bool:
         if self._thread is not None and self._thread.is_alive():
             return self.stats.opened
         self._stop_event.clear()
         self._started_event.clear()
         self._thread = threading.Thread(target=self._run, name="observer-camera", daemon=True)
         self._thread.start()
-        startup_finished = self._started_event.wait(timeout=wait_seconds)
-        if not startup_finished:
-            self._set_stats(last_error=f"camera startup timed out after {wait_seconds:g}s")
-            return False
-        return self.stats.opened
+        deadline = time.monotonic() + max(0.0, wait_seconds)
+        while True:
+            if cancelled and cancelled():
+                self._stop_event.set()
+                self._thread.join(timeout=.2)
+                self._set_stats(last_error="camera startup cancelled")
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._set_stats(last_error=f"camera startup timed out after {wait_seconds:g}s")
+                return False
+            if self._started_event.wait(timeout=min(.05, remaining)):
+                return self.stats.opened
 
     def stop(self, join_seconds: float = 3.0) -> None:
         self._stop_event.set()

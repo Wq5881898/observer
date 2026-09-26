@@ -12,7 +12,7 @@ def observation(at: float, signal: SignalValue) -> Observation:
 class SustainedRuleTests(unittest.TestCase):
     def test_soft_defaults_alert_but_never_emit_penalties(self) -> None:
         for config in default_rule_configs():
-            if config.rule_id not in ('attention_away', 'posture_deviation', 'ergonomic_risk'):
+            if config.rule_id not in ('posture_deviation', 'ergonomic_risk'):
                 continue
             with self.subTest(rule=config.rule_id):
                 rule = SustainedRule(config)
@@ -29,6 +29,62 @@ class SustainedRuleTests(unittest.TestCase):
                         config.signal_name: SignalValue.compliant()
                     })))
                 self.assertIs(rule.phase, RulePhase.CLEAR)
+
+    def test_health_group_allows_at_most_one_alert_per_five_minutes(self) -> None:
+        configs = tuple(config for config in default_rule_configs()
+                        if config.alert_group == 'health')
+        engine = RuleEngine(configs)
+        alerts = []
+        activations = []
+        signals = {config.signal_name: SignalValue.violation() for config in configs}
+        for second in range(31):
+            result = engine.process(Observation(float(second), signals))
+            alerts.extend(action for action in result.actions
+                          if action.kind is ActionKind.ALERT)
+            activations.extend(action for action in result.actions
+                               if action.kind is ActionKind.ACTIVATED)
+        self.assertEqual(len(activations), 2)
+        self.assertEqual(len(alerts), 1)
+
+        compliant = {config.signal_name: SignalValue.compliant() for config in configs}
+        for second in range(31, 38):
+            engine.process(Observation(float(second), compliant))
+        for second in range(38, 70):
+            result = engine.process(Observation(float(second), signals))
+            alerts.extend(action for action in result.actions
+                          if action.kind is ActionKind.ALERT)
+        self.assertEqual(len(alerts), 1)
+
+        for second in range(70, 307):
+            engine.process(Observation(float(second), compliant))
+        for second in range(307, 339):
+            result = engine.process(Observation(float(second), signals))
+            alerts.extend(action for action in result.actions
+                          if action.kind is ActionKind.ALERT)
+        self.assertEqual(len(alerts), 2)
+
+    def test_health_cooldown_does_not_suppress_attention_or_phone_rules(self) -> None:
+        configs = default_rule_configs()
+        engine = RuleEngine(configs)
+        alert_rules = []
+        signals = {
+            config.signal_name: (
+                SignalValue.violation()
+                if config.rule_id in ('attention_away', 'phone_held', 'posture_deviation')
+                else SignalValue.compliant()
+            )
+            for config in configs
+        }
+        for second in range(22):
+            result = engine.process(Observation(float(second), signals))
+            alert_rules.extend(action.rule_id for action in result.actions
+                               if action.kind is ActionKind.ALERT)
+        self.assertEqual(alert_rules.count('attention_away'), 1)
+        self.assertEqual(alert_rules.count('phone_held'), 1)
+        self.assertEqual(alert_rules.count('posture_deviation'), 1)
+        # The frozen C attention rule remains an alert-only signal. Product D
+        # applies its current time-ratio consequences in product_rule_configs.
+        self.assertEqual(engine.ledger.total_points, 5)
 
     def setUp(self) -> None:
         self.config = RuleConfig(

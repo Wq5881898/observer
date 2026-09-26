@@ -1,0 +1,11 @@
+{
+  "process_cpu_average_percent": 10.581538865546218,
+  "process_cpu_p95_percent": 13.35,
+  "process_memory_growth_mb_per_hour": 0.0,
+  "process_memory_peak_mb": 457.05078125,
+  "sample_count": 476,
+  "sample_interval_seconds": 5.0,
+  "sampling_error": null,
+  "violations": [],
+  "within_budget": true
+}

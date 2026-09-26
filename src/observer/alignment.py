@@ -4,7 +4,7 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Callable
 
 from observer.calibration import CalibrationProfile, load_profile
 from observer.camera import CameraWorker
@@ -500,6 +500,9 @@ def guide_attention_session_baseline(
     *,
     stable_seconds: float = 3.0,
     timeout_seconds: float = 60.0,
+    show_preview: bool = True,
+    progress: Callable[[float, float, str | None], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> AttentionBaselineResult:
     """Capture neutral head pose at the user's natural working distance.
 
@@ -510,13 +513,17 @@ def guide_attention_session_baseline(
 
     if stable_seconds <= 0 or timeout_seconds <= 0:
         raise ValueError("attention baseline durations must be positive")
-    import cv2
-
+    if cancelled and cancelled():
+        raise AlignmentCancelled("session setup cancelled")
+    cv2 = None
     window = "Observer session setup - no recording"
-    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    if hasattr(cv2, "WND_PROP_TOPMOST"):
-        cv2.setWindowProperty(window, cv2.WND_PROP_TOPMOST, 1)
+    if show_preview:
+        import cv2 as cv2_module
+        cv2 = cv2_module
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        if hasattr(cv2, "WND_PROP_TOPMOST"):
+            cv2.setWindowProperty(window, cv2.WND_PROP_TOPMOST, 1)
 
     started = time.monotonic()
     valid_since: float | None = None
@@ -528,9 +535,12 @@ def guide_attention_session_baseline(
     invalid_reason_counts: dict[str, int] = {}
     longest_valid_seconds = 0.0
     last_invalid_reason = "no camera frame"
+    last_progress_at = 0.0
     try:
         while True:
             now = time.monotonic()
+            if cancelled and cancelled():
+                raise AlignmentCancelled("session setup cancelled")
             if now - started >= timeout_seconds:
                 raise RuntimeError(
                     _attention_setup_timeout_message(
@@ -542,7 +552,10 @@ def guide_attention_session_baseline(
                 )
             snapshot = camera.buffer.latest(after_sequence=last_sequence)
             if snapshot is None:
-                _check_cancel(cv2.waitKeyEx(10))
+                if cv2 is not None:
+                    _check_cancel(cv2.waitKeyEx(10))
+                else:
+                    time.sleep(.01)
                 continue
             last_sequence = snapshot.sequence
             probe.process_due(
@@ -588,45 +601,49 @@ def guide_attention_session_baseline(
 
             held = 0.0 if valid_since is None else now - valid_since
             longest_valid_seconds = max(longest_valid_seconds, held)
-            preview = cv2.flip(snapshot.frame, 1)
-            cv2.rectangle(preview, (0, 0), (preview.shape[1], 112), (20, 20, 20), -1)
-            cv2.putText(
-                preview,
-                "SESSION SETUP - NO RECORDING",
-                (18, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (0, 220, 255),
-                2,
-                cv2.LINE_AA,
-            )
-            cv2.putText(
-                preview,
-                "Sit naturally. Look at the SCREEN CENTER.",
-                (18, 66),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.56,
-                (255, 255, 255),
-                2,
-                cv2.LINE_AA,
-            )
+            if progress and (last_progress_at == 0.0 or now-last_progress_at >= .2):
+                progress(held, stable_seconds, None if valid else last_invalid_reason)
+                last_progress_at = now
             status = (
                 f"Hold still {min(held, stable_seconds):.1f}/{stable_seconds:.1f}s"
                 if valid
                 else f"Not ready: {last_invalid_reason}"
             )
-            cv2.putText(
-                preview,
-                status,
-                (18, 98),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.50,
-                (80, 255, 80) if valid else (0, 220, 255),
-                2,
-                cv2.LINE_AA,
-            )
-            cv2.imshow(window, preview)
-            _check_cancel(cv2.waitKeyEx(1))
+            if cv2 is not None:
+                preview = cv2.flip(snapshot.frame, 1)
+                cv2.rectangle(preview, (0, 0), (preview.shape[1], 112), (20, 20, 20), -1)
+                cv2.putText(
+                    preview,
+                    "SESSION SETUP - NO RECORDING",
+                    (18, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (0, 220, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    preview,
+                    "Sit naturally. Look at the SCREEN CENTER.",
+                    (18, 66),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.56,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    preview,
+                    status,
+                    (18, 98),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.50,
+                    (80, 255, 80) if valid else (0, 220, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.imshow(window, preview)
+                _check_cancel(cv2.waitKeyEx(1))
             if held >= stable_seconds and samples:
                 baseline = attention_session_baseline_from_samples(samples)
                 probe.set_attention_session_baseline(
@@ -639,10 +656,11 @@ def guide_attention_session_baseline(
                     values=baseline,
                 )
     finally:
-        try:
-            cv2.destroyWindow(window)
-        except cv2.error:
-            pass
+        if cv2 is not None:
+            try:
+                cv2.destroyWindow(window)
+            except cv2.error:
+                pass
 
 
 def _attention_setup_timeout_message(

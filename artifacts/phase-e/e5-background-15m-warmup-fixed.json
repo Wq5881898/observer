@@ -1,0 +1,139 @@
+{
+  "requested_seconds": 900.0,
+  "profile": null,
+  "session_startup_seconds": 7.094,
+  "actual_seconds": 900.0,
+  "camera_released_after_end": true,
+  "exit_seconds": 0.531,
+  "runtime_lock_released": true,
+  "session_state": "ended",
+  "product_resources": {
+    "process_cpu_average_percent": 11.837081005586592,
+    "process_cpu_p95_percent": 18.275,
+    "process_memory_growth_mb_per_hour": 6.920798431355128,
+    "process_memory_peak_mb": 454.37890625,
+    "sample_count": 179,
+    "sample_interval_seconds": 5.0,
+    "sampling_error": null,
+    "violations": [],
+    "within_budget": true
+  },
+  "samples": 900,
+  "cpu_average_percent": 11.91,
+  "cpu_p95_percent": 19.525,
+  "memory_peak_mb": 463.762,
+  "memory_start_end_mb": [
+    453.312,
+    463.215
+  ],
+  "memory_growth_mb_per_hour": 39.652,
+  "threads_start_end_peak": [
+    70,
+    62,
+    74
+  ],
+  "handles_start_end_peak": [
+    1107,
+    1114,
+    1128
+  ],
+  "minute_checkpoints": [
+    {
+      "elapsed": 0.0,
+      "memory_mb": 453.312,
+      "threads": 70,
+      "handles": 1107
+    },
+    {
+      "elapsed": 60.0,
+      "memory_mb": 461.98,
+      "threads": 63,
+      "handles": 1113
+    },
+    {
+      "elapsed": 120.0,
+      "memory_mb": 452.09,
+      "threads": 62,
+      "handles": 1111
+    },
+    {
+      "elapsed": 180.0,
+      "memory_mb": 452.578,
+      "threads": 63,
+      "handles": 1113
+    },
+    {
+      "elapsed": 240.0,
+      "memory_mb": 452.648,
+      "threads": 60,
+      "handles": 1105
+    },
+    {
+      "elapsed": 300.0,
+      "memory_mb": 452.875,
+      "threads": 62,
+      "handles": 1106
+    },
+    {
+      "elapsed": 360.0,
+      "memory_mb": 452.98,
+      "threads": 65,
+      "handles": 1118
+    },
+    {
+      "elapsed": 420.0,
+      "memory_mb": 452.977,
+      "threads": 64,
+      "handles": 1120
+    },
+    {
+      "elapsed": 480.0,
+      "memory_mb": 452.941,
+      "threads": 62,
+      "handles": 1112
+    },
+    {
+      "elapsed": 540.0,
+      "memory_mb": 452.977,
+      "threads": 62,
+      "handles": 1112
+    },
+    {
+      "elapsed": 600.0,
+      "memory_mb": 452.742,
+      "threads": 63,
+      "handles": 1112
+    },
+    {
+      "elapsed": 660.0,
+      "memory_mb": 453.082,
+      "threads": 63,
+      "handles": 1110
+    },
+    {
+      "elapsed": 720.0,
+      "memory_mb": 462.504,
+      "threads": 63,
+      "handles": 1118
+    },
+    {
+      "elapsed": 780.0,
+      "memory_mb": 453.16,
+      "threads": 63,
+      "handles": 1118
+    },
+    {
+      "elapsed": 840.0,
+      "memory_mb": 454.676,
+      "threads": 62,
+      "handles": 1114
+    },
+    {
+      "elapsed": 899.0,
+      "memory_mb": 463.215,
+      "threads": 62,
+      "handles": 1114
+    }
+  ],
+  "within_cpu_memory_budget": true
+}

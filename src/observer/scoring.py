@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from observer.observations import Observation
-from observer.rules import ActionKind, RuleAction, RuleConfig, SustainedRule
+from observer.rules import ActionKind, RuleAction, RuleConfig, RulePhase, SustainedRule
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,17 +69,29 @@ class RuleEngine:
             raise ValueError("rule ids must be unique")
         self._configs = {config.rule_id: config for config in configs}
         self._rules = {config.rule_id: SustainedRule(config) for config in configs}
+        self._next_group_alert_at: dict[str, float] = {}
         self.ledger = PenaltyLedger(baseline_score)
+
+    @property
+    def phases(self) -> dict[str, RulePhase]:
+        return {rule_id: rule.phase for rule_id, rule in self._rules.items()}
 
     def process(self, observation: Observation) -> EngineResult:
         actions: list[RuleAction] = []
         penalties: list[PenaltyEntry] = []
         for rule_id, rule in self._rules.items():
             rule_actions = rule.update(observation)
-            actions.extend(rule_actions)
             for action in rule_actions:
+                config = self._configs[rule_id]
+                if action.kind is ActionKind.ALERT and config.alert_group:
+                    next_at = self._next_group_alert_at.get(config.alert_group, 0.0)
+                    if action.at_monotonic < next_at:
+                        continue
+                    self._next_group_alert_at[config.alert_group] = (
+                        action.at_monotonic + config.alert_cooldown_seconds
+                    )
+                actions.append(action)
                 entry = self.ledger.apply(action, self._configs[rule_id])
                 if entry is not None:
                     penalties.append(entry)
         return EngineResult(tuple(actions), tuple(penalties), self.ledger.score)
-

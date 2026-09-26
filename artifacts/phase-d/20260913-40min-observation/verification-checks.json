@@ -1,0 +1,22 @@
+{
+  "session_id": "aed4a2ef-2915-46c7-a04b-da1a4addbaf7",
+  "task_id": "e6e65acf-7164-49e7-b013-790893ae4f40",
+  "session_state": "ended",
+  "task_state": "ended",
+  "elapsed_seconds_from_totals": 2400.0310000000172,
+  "hard_signal_coverage_percent": 99.83146051030485,
+  "score": 95.0,
+  "deducted_points": 5.0,
+  "alert_count": 9,
+  "alert_count_by_rule": {
+    "phone_held": 1,
+    "attention_away": 1,
+    "posture_deviation": 4,
+    "ergonomic_risk": 3
+  },
+  "delivered_alert_count": 9,
+  "delivery_error_count": 0,
+  "evidence_image_count": 0,
+  "resource_within_budget": true,
+  "resource_violation_count": 0
+}

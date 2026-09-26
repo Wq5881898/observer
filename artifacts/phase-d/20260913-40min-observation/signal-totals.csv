@@ -1,0 +1,6 @@
+﻿signal,eligible_seconds,valid_seconds,unknown_seconds,valid_coverage_percent,violation_seconds,violation_of_valid_percent
+attention_away,2400.031,2055.984,344.047,85.665,17.876,0.869
+away,2400.031,2399.594,0.437,99.982,0.000,0.000
+ergonomic_risk,2400.031,2342.804,57.227,97.616,967.662,41.304
+phone_held,2400.031,2395.986,4.045,99.831,42.080,1.756
+posture_deviation,2400.031,2331.777,68.254,97.156,779.552,33.432

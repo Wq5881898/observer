@@ -34,6 +34,7 @@ class RuleConfig:
     repeat_penalty_interval_seconds: float = 60.0
     maximum_penalty_points: float = 25.0
     maximum_sample_gap_seconds: float = 2.0
+    alert_group: str | None = None
 
     def __post_init__(self) -> None:
         if not self.rule_id or not self.signal_name:
@@ -50,6 +51,8 @@ class RuleConfig:
             raise ValueError("rule durations cannot be negative")
         if self.maximum_sample_gap_seconds == 0:
             raise ValueError("maximum_sample_gap_seconds must be positive")
+        if self.alert_group is not None and not self.alert_group.strip():
+            raise ValueError("alert_group cannot be empty")
         if min(
             self.initial_penalty_points,
             self.repeat_penalty_points,
@@ -266,6 +269,7 @@ def default_rule_configs() -> tuple[RuleConfig, ...]:
             initial_penalty_points=0.0,
             repeat_penalty_points=0.0,
             maximum_penalty_points=0.0,
+            alert_group="health",
         ),
         RuleConfig(
             "ergonomic_risk",
@@ -276,6 +280,7 @@ def default_rule_configs() -> tuple[RuleConfig, ...]:
             initial_penalty_points=0.0,
             repeat_penalty_points=0.0,
             maximum_penalty_points=0.0,
+            alert_group="health",
         ),
         RuleConfig(
             "phone_held",
@@ -284,5 +289,6 @@ def default_rule_configs() -> tuple[RuleConfig, ...]:
             initial_penalty_points=5.0,
             repeat_penalty_points=2.0,
             repeat_penalty_interval_seconds=60.0,
+            maximum_penalty_points=25.0,
         ),
     )

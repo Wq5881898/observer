@@ -4,7 +4,7 @@ import math
 import os
 import statistics
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Iterable
 
 from observer.config import ResourceBudget
@@ -56,6 +56,64 @@ class ResourceSampler:
             system_cpu_percent=self._psutil.cpu_percent(interval=None),
             system_available_memory_mb=virtual_memory.available / (1024 * 1024),
         )
+
+
+class SessionResourceTracker:
+    """Bounded, failure-isolated resource sampling for one product session."""
+
+    def __init__(self, budget: ResourceBudget, sampler_factory=ResourceSampler,
+                 interval_seconds: float = 5.0, max_samples: int = 20_000) -> None:
+        if not math.isfinite(interval_seconds) or interval_seconds <= 0:
+            raise ValueError("resource sample interval must be positive")
+        if max_samples < 2:
+            raise ValueError("resource sample limit must be at least two")
+        self.budget = budget
+        self.sampler_factory = sampler_factory
+        self.interval_seconds = interval_seconds
+        self.max_samples = max_samples
+        self.sampler = None
+        self.samples: list[ResourceSnapshot] = []
+        self.next_sample = 0.0
+        self.error: str | None = None
+        self.active = False
+
+    def begin(self, at: float) -> None:
+        self.samples = []
+        self.next_sample = at
+        self.error = None
+        self.active = True
+        try:
+            self.sampler = self.sampler_factory()
+        except Exception as exc:
+            self.sampler = None
+            self.error = str(exc).strip()[:500] or type(exc).__name__
+        self.sample(at, force=True)
+
+    def sample(self, at: float, force: bool = False) -> None:
+        if not self.active or self.sampler is None:
+            return
+        if not force and at < self.next_sample:
+            return
+        if len(self.samples) >= self.max_samples:
+            self.error = "resource sample limit reached"
+            self.sampler = None
+            return
+        try:
+            self.samples.append(self.sampler.sample())
+        except Exception as exc:
+            self.error = str(exc).strip()[:500] or type(exc).__name__
+            self.sampler = None
+        self.next_sample = at + self.interval_seconds
+
+    def finish(self, at: float) -> dict | None:
+        if not self.active:
+            return None
+        self.sample(at, force=True)
+        self.active = False
+        result = asdict(summarize_resources(self.samples, self.budget))
+        result['sample_interval_seconds'] = self.interval_seconds
+        result['sampling_error'] = self.error
+        return result
 
 
 def percentile(values: list[float], probability: float) -> float:
