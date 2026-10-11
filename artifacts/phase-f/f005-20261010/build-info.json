@@ -1,0 +1,234 @@
+{
+  "build_id": "f005-20261010",
+  "version": "0.1.0",
+  "created_utc": "2026-10-11T01:36:40.920524+00:00",
+  "python": "3.11.15 (main, Jul 18 2026, 17:06:27) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "git_head": "6b37f255318b2824fe4294a7d8378e35fe22a51e",
+  "git_worktree_dirty": true,
+  "source_tree_sha256": "49aa3165762217379f0146e95f088aab9cf04df5c69f3dad85c05f1c76c32ed2",
+  "source_files": {
+    "src/observer/__init__.py": "672e8cbe908e4765a2473dc0fe211b0d9c3dc9c27042c85cbb00c402fc8bd568",
+    "src/observer/__main__.py": "64cd0e92348cafeec92c1cccdc84a8b8f2bcf095620bbbbad1f087c919654d24",
+    "src/observer/alignment.py": "2130e218abe316789695a254d0381a02fdd34a395b1a8f955c90a66bfc3e1e0c",
+    "src/observer/calibration.py": "7885366e2b2875ab628d0a94756d6d6588cfd36923377ad2765bc7c1013125b2",
+    "src/observer/calibration_workflow.py": "6bd3292d700c63cbc26b135645b8c6394f119e397f1db6c3a0f89feab21cabca",
+    "src/observer/camera.py": "db7021b254b724f1057adc603763420d016df51d0feedb13b0a2ed10b5e22faa",
+    "src/observer/cli.py": "9c3dc322acb34b6d47b06b90879b95816f1a5cf7e8d8b28656c2a2a2ee7fb957",
+    "src/observer/config.py": "36c163043d7d8f060ef4c19712eb1507f26d3345c32fa416ee48d8de3ac9b86b",
+    "src/observer/deployment.py": "c59a33f8a2047f2a17354d609d7cb424ae7c51918037b1ceba0609d6eacc2f50",
+    "src/observer/desktop.py": "a362ea42f1277e4bda89f83657c2c4706a7b373e69ed678ba310af5adc3b187b",
+    "src/observer/desktop_ipc.py": "23cc123f8513e5a43963784ac841ddaa5cafe275c71475cd6c831cacf1de20c1",
+    "src/observer/desktop_tray.py": "6f98aa48c837c283321a86e89de61cb57fe2988dcc1e7b7f52505dd762c4da6b",
+    "src/observer/focus.py": "92463eac65a9c4113def81836aff7cddc8a91b8ac245ce7b7042ae0aca77f78c",
+    "src/observer/frames.py": "e558c831cbdcc192d44f275a906a181886b7c4d5a64e0f7eb579b71981a25912",
+    "src/observer/frozen_entry.py": "81b42c79825bca21966a2e21452abcd106e8b0b693e04e06cbae8d37b99c8a2e",
+    "src/observer/fusion.py": "5e5f56859cd380e27804c062e670d891fa2e3f2d4a95a8f1a017aa6c4257c8f6",
+    "src/observer/live_validation.py": "066b34d30879c9f72fe1d3013cfc203ed40152cbfa60182431c78f492aca3185",
+    "src/observer/models.py": "4983bf1703f2ee0769560f51fd75604c8313a0941b35949a63a29db51ff92d47",
+    "src/observer/object_detection.py": "ea523312b1001cc5fedcfb31baef6dfacf526067f7cd1d11713776d79c662282",
+    "src/observer/observations.py": "94669a9d630c5a1e817cfaaaa1fb1b31d8fd46aaeb60b77668f1add0fda836a2",
+    "src/observer/perception.py": "1219f388ab1e4aa1c02dc8fa20a2cdb065050f0e40f8a4f7498af6c8bd958a7a",
+    "src/observer/power_events.py": "ee5b196fe1b9a3089f7769a984d8bd661c0f2fad2c9973a3ed9d140f0478a232",
+    "src/observer/product.py": "6c215ff52bbf9710ad541146707afaccf43beff4b00ae72252090d543b4fe228",
+    "src/observer/product_cli.py": "525debc6decf90d058a39366cd380c5379c9e6b872c5b1fa90b86254fa589787",
+    "src/observer/resources.py": "f439e124149a16839e0e8cbb7ea5601b83d0670ef42a8cf991b3721075cfa44d",
+    "src/observer/rules.py": "8e0e5b1f00993e62302160e0c76acf20c3e18dbf2560e9a2578d980f86ab6a24",
+    "src/observer/runtime_watch.py": "8e9af62ec5ccf02ddb3f4ee403eb1527556cc1f1597205f38cf11145c35f4da9",
+    "src/observer/scoring.py": "cda340e5b72879a8e75773ac57d32c95d21db15e0c74816ff33788e2829f3d83",
+    "src/observer/validation.py": "f2684acba83de7a86e3f6acc927811f43e060b38e28c4bb562595a13eb2dabc0",
+    "src/observer/vision.py": "80062a17bf8c38b97561e9ebf090ed51d71e1dfe5f57a43cf10ee684d59d40f3"
+  },
+  "inputs": {
+    "pyproject.toml": "c250a17882a94c06f0de66eef75ae7445b57b3b8909a4d7ae24a4e1aab22e7a4",
+    "uv.lock": "ca87a74109ef3d2ed032a5100dc2d9414594219562926ed7a2e1e4ad37ccb8a1",
+    "src/observer/default_config.json": "67a2d6a2890d8495147ab00390c02e7b329eb608829f7d3c796c214f57b41e06",
+    "scripts/build_windows.py": "f7eb9880b0acae6e1fdcbde7750a3cab366af184eca50d4cc0e6131db5f46fa7",
+    "scripts/build_windows.ps1": "8201339f32b517ebdcb99238e34fd7e3c25ae63891ced513461a83366c883ade",
+    "scripts/test_windows_candidate.py": "18a96271c3a0276040ffc1cc91fbdafe6c2a8faa2c68f47e4b1042e9d964b888",
+    "scripts/test_candidate_readonly.ps1": "171870a1d6ed63e98ad9de5b4c26789b1e3bf733c4d862025af869fcdf23d1d1",
+    "packaging/entry.py": "adb8008fe1dcb70f2e687610f2a2b2236dd7225157c98a82ed8e7362c1d7a860",
+    "packaging/frozen_diagnostics.py": "06240324a0f69cfd2f0024ec8dc6b54719040e4c54ca4e3aa8249a22c39be698",
+    "packaging/Observer.spec": "f731d4b3ad7f13f0972d380acd00ca3671b32c2336dd195e46565ed27f68a2f1",
+    "packaging/REDISTRIBUTION.md": "667c9230d3610c1af35f80ff0aa774c7d566be5d5e1fd6f9a10d474256f0e087",
+    "packaging/requirements.in": "e73557181cd50db5ebe0a2a3811b90ad65f1d98e9c9be0a4309472f7718c8a4d",
+    "packaging/requirements.lock": "3c1d9f04a2474c00d77e563c8bb177b44aba99506cc56b4e3782aa73da646ec7",
+    "packaging/START-HERE.txt": "45f684e039d5bcb86ed05ed6de35dff04844861dd57adb9fbf16e6daa1805694",
+    "models/manifest.json": "b049addf45643a8b2feff4281be0a1aede74ab45c7d49aa2f95a930572c9fb59",
+    "models/face_landmarker.task": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+    "models/pose_landmarker_lite.task": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+    "models/efficientdet_lite0_int8.tflite": "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb",
+    "models/yolo/observer-phone-s304-e2b.onnx": "c4a8a791e227780b334e075d671d4347ed9d5fee7474d6f017659366709c486f"
+  },
+  "packages": [
+    {
+      "name": "absl-py",
+      "version": "2.5.0"
+    },
+    {
+      "name": "altgraph",
+      "version": "0.17.5"
+    },
+    {
+      "name": "attrs",
+      "version": "26.1.0"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1"
+    },
+    {
+      "name": "contourpy",
+      "version": "1.3.3"
+    },
+    {
+      "name": "cycler",
+      "version": "0.12.1"
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19"
+    },
+    {
+      "name": "fonttools",
+      "version": "4.63.0"
+    },
+    {
+      "name": "jax",
+      "version": "0.7.1"
+    },
+    {
+      "name": "jaxlib",
+      "version": "0.7.1"
+    },
+    {
+      "name": "kiwisolver",
+      "version": "1.5.1"
+    },
+    {
+      "name": "matplotlib",
+      "version": "3.11.1"
+    },
+    {
+      "name": "mediapipe",
+      "version": "0.10.21"
+    },
+    {
+      "name": "ml_dtypes",
+      "version": "0.5.4"
+    },
+    {
+      "name": "numpy",
+      "version": "1.26.4"
+    },
+    {
+      "name": "observer-focus",
+      "version": "0.1.0"
+    },
+    {
+      "name": "observer-focus",
+      "version": "0.1.0"
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.29.0"
+    },
+    {
+      "name": "opencv-contrib-python",
+      "version": "4.11.0.86"
+    },
+    {
+      "name": "opt_einsum",
+      "version": "3.4.0"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "name": "pefile",
+      "version": "2024.8.26"
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0"
+    },
+    {
+      "name": "protobuf",
+      "version": "4.25.9"
+    },
+    {
+      "name": "psutil",
+      "version": "7.2.2"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0"
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.22.3"
+    },
+    {
+      "name": "pyinstaller-hooks-contrib",
+      "version": "2026.8"
+    },
+    {
+      "name": "pyparsing",
+      "version": "3.3.2"
+    },
+    {
+      "name": "PySide6",
+      "version": "6.11.2"
+    },
+    {
+      "name": "PySide6_Addons",
+      "version": "6.11.2"
+    },
+    {
+      "name": "PySide6_Essentials",
+      "version": "6.11.2"
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0"
+    },
+    {
+      "name": "pywin32-ctypes",
+      "version": "0.2.3"
+    },
+    {
+      "name": "scipy",
+      "version": "1.17.1"
+    },
+    {
+      "name": "sentencepiece",
+      "version": "0.2.2"
+    },
+    {
+      "name": "setuptools",
+      "version": "84.0.0"
+    },
+    {
+      "name": "shiboken6",
+      "version": "6.11.2"
+    },
+    {
+      "name": "six",
+      "version": "1.17.0"
+    },
+    {
+      "name": "sounddevice",
+      "version": "0.5.6"
+    },
+    {
+      "name": "tzdata",
+      "version": "2026.4"
+    },
+    {
+      "name": "tzlocal",
+      "version": "5.4.4"
+    }
+  ],
+  "status": "internal candidate; E gates and redistribution review pending"
+}

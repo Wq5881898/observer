@@ -1,0 +1,134 @@
+809 INFO: PyInstaller: 6.22.3, contrib hooks: 2026.8
+809 INFO: Python: 3.11.15
+835 INFO: Platform: Windows-10-10.0.26200-SP0
+837 INFO: Python environment: C:\Qproject\Observer\build\phase-f-env
+843 INFO: Removing temporary files and cleaning cache in C:\Qproject\Observer\build\phase-f\f006-sound-20261010\pyinstaller-cache\pyinstaller
+7272 INFO: Module search paths (PYTHONPATH):
+['C:\\Qproject\\Observer',
+ 'C:\\Users\\qcalg\\AppData\\Roaming\\uv\\python\\cpython-3.11-windows-x86_64-none\\python311.zip',
+ 'C:\\Users\\qcalg\\AppData\\Roaming\\uv\\python\\cpython-3.11-windows-x86_64-none\\DLLs',
+ 'C:\\Users\\qcalg\\AppData\\Roaming\\uv\\python\\cpython-3.11-windows-x86_64-none\\Lib',
+ 'C:\\Users\\qcalg\\AppData\\Roaming\\uv\\python\\cpython-3.11-windows-x86_64-none',
+ 'C:\\Qproject\\Observer\\build\\phase-f-env',
+ 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages',
+ 'C:\\Qproject\\Observer\\src',
+ 'C:\\Qproject\\Observer\\packaging',
+ 'C:\\Qproject\\Observer\\src']
+11393 INFO: Appending 'binaries' from .spec
+11401 INFO: Appending 'datas' from .spec
+11692 INFO: checking Analysis
+11693 INFO: Building Analysis because Analysis-00.toc is non existent
+11693 INFO: Looking for Python shared library...
+11693 INFO: Using Python shared library: C:\Users\qcalg\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\python311.dll
+11693 INFO: Running Analysis Analysis-00.toc
+11693 INFO: Target bytecode optimization level: 0
+11693 INFO: Initializing module dependency graph...
+11730 INFO: Initializing module graph hook caches...
+12070 INFO: Analyzing modules for base_library.zip ...
+19942 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+25173 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+25789 INFO: Processing standard module hook 'hook-math.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+28707 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+53356 INFO: Caching module dependency graph...
+54288 INFO: Analyzing C:\Qproject\Observer\packaging\entry.py
+54450 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+56512 INFO: Processing standard module hook 'hook-sqlite3.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+61551 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+62013 INFO: Processing standard module hook 'hook-zoneinfo.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+62285 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+62484 INFO: Processing standard module hook 'hook-cv2.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+67414 INFO: Processing standard module hook 'hook-numpy.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+70679 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+71323 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+71508 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+73757 INFO: Processing standard module hook 'hook-webbrowser.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+73911 INFO: Processing standard module hook 'hook-psutil.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+77606 INFO: Processing standard module hook 'hook-onnxruntime.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+77918 INFO: Processing pre-safe-import-module hook 'hook-tensorflow.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\pre_safe_import_module'
+79481 INFO: Processing standard module hook 'hook-matplotlib.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+80854 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+80859 INFO: SetuptoolsInfo: initializing cached setuptools info...
+82816 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+83526 INFO: Processing standard module hook 'hook-matplotlib.backend_bases.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+83835 INFO: Processing standard module hook 'hook-PIL.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+84042 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+85089 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+86018 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+88899 INFO: Processing standard module hook 'hook-matplotlib.backends.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+89198 INFO: Processing standard module hook 'hook-matplotlib.pyplot.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+89524 INFO: Processing standard module hook 'hook-matplotlib.figure.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+91670 INFO: Processing standard module hook 'hook-dateutil.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+92059 INFO: Processing pre-safe-import-module hook 'hook-six.moves.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+101509 INFO: Processing pre-safe-import-module hook 'hook-gi.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+106846 INFO: Processing standard module hook 'hook-sounddevice.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+108733 INFO: Processing standard module hook 'hook-PySide6.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+109893 INFO: Processing standard module hook 'hook-shiboken6.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+110505 INFO: Processing standard module hook 'hook-PySide6.QtNetwork.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+120495 INFO: Processing standard module hook 'hook-PySide6.QtCore.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+130833 INFO: Processing standard module hook 'hook-PySide6.QtGui.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+162464 INFO: Processing standard module hook 'hook-PySide6.QtWidgets.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+167123 INFO: Analyzing hidden import 'tzdata'
+167133 INFO: Processing module hooks (post-graph stage)...
+167187 INFO: Processing standard module hook 'hook-tzdata.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+169313 INFO: Processing standard module hook 'hook-matplotlib.backends.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+169316 INFO: Matplotlib backend selection method: user-provided name(s)
+170385 INFO: Selected matplotlib backends: ['Agg']
+170385 INFO: Extra dists for selected matplotlib backends: []
+171070 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+171296 INFO: Performing binary vs. data reclassification (1066 entries)
+175100 INFO: Looking for ctypes DLLs
+175557 INFO: Analyzing run-time hooks ...
+175571 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175588 INFO: Including run-time hook 'pyi_rth_pyside6.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175603 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+175614 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks'
+175629 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175650 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175665 INFO: Including run-time hook 'pyi_rth_mplconfig.py' from 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+175866 INFO: Creating base_library.zip...
+175961 INFO: Looking for dynamic libraries
+C:\Qproject\Observer\build\phase-f-env\Lib\site-packages\PyInstaller\building\build_main.py:227: UserWarning: The numpy.array_api submodule is still experimental. See NEP 47.
+  __import__(package)
+187101 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\shiboken6', 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\numpy.libs', 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\cv2\\../../x64/vc14/bin']
+187101 INFO: Extra DLL search directories (PATH): ['C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\cv2\\../../x64/vc14/bin', 'C:\\Qproject\\Observer\\build\\phase-f-env\\Lib\\site-packages\\PySide6']
+193583 INFO: Warnings written to C:\Qproject\Observer\build\phase-f\f006-sound-20261010\work\Observer\warn-Observer.txt
+193728 INFO: Graph cross-reference written to C:\Qproject\Observer\build\phase-f\f006-sound-20261010\work\Observer\xref-Observer.html
+193841 INFO: checking PYZ
+193841 INFO: Building PYZ because PYZ-00.toc is non existent
+193841 INFO: Building PYZ (ZlibArchive) C:\Qproject\Observer\build\phase-f\f006-sound-20261010\work\Observer\PYZ-00.pyz
+195074 INFO: Building PYZ (ZlibArchive) C:\Qproject\Observer\build\phase-f\f006-sound-20261010\work\Observer\PYZ-00.pyz completed successfully.
+195125 INFO: checking PKG
+195125 INFO: Building PKG because PKG-00.toc is non existent
+195125 INFO: Building PKG (CArchive) Observer-diagnostic.pkg
+195236 INFO: Building PKG (CArchive) Observer-diagnostic.pkg completed successfully.
+195239 INFO: Bootloader C:\Qproject\Observer\build\phase-f-env\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\run.exe
+195239 INFO: checking EXE
+195239 INFO: Building EXE because EXE-00.toc is non existent
+195239 INFO: Building EXE from EXE-00.toc
+195239 INFO: Copying bootloader EXE to C:\Qproject\Observer\build\phase-f\f006-sound-20261010\work\Observer\Observer-diagnostic.exe
+195317 INFO: Copying icon to EXE
+195363 INFO: Copying 0 resources to EXE
+195363 INFO: Embedding manifest in EXE
+195427 INFO: Appending PKG archive to EXE
+195506 INFO: Fixing EXE headers
+195936 INFO: Building EXE from EXE-00.toc completed successfully.
+195939 INFO: checking PKG
+195939 INFO: Building PKG because PKG-01.toc is non existent
+195939 INFO: Building PKG (CArchive) Observer.pkg
+196043 INFO: Building PKG (CArchive) Observer.pkg completed successfully.
+196045 INFO: Bootloader C:\Qproject\Observer\build\phase-f-env\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+196045 INFO: checking EXE
+196045 INFO: Building EXE because EXE-01.toc is non existent
+196045 INFO: Building EXE from EXE-01.toc
+196047 INFO: Copying bootloader EXE to C:\Qproject\Observer\build\phase-f\f006-sound-20261010\work\Observer\Observer.exe
+196114 INFO: Copying icon to EXE
+196169 INFO: Copying 0 resources to EXE
+196169 INFO: Embedding manifest in EXE
+196241 INFO: Appending PKG archive to EXE
+196317 INFO: Fixing EXE headers
+196671 INFO: Building EXE from EXE-01.toc completed successfully.
+196689 INFO: checking COLLECT
+196689 INFO: Building COLLECT because COLLECT-00.toc is non existent
+196689 INFO: Building COLLECT COLLECT-00.toc
+202755 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+202818 INFO: Build complete! The results are available in: C:\Qproject\Observer\dist\f006-sound-20261010

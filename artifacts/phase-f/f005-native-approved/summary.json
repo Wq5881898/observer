@@ -1,0 +1,78 @@
+{
+  "started_utc": "2026-10-11T01:42:12.875252+00:00",
+  "candidate": "C:\\Qproject\\Observer\\dist\\f005-20261010\\Observer",
+  "sanitized_path": "C:\\Windows\\System32",
+  "camera_opened": false,
+  "runs": [
+    {
+      "label": "original-native",
+      "command": [
+        "C:\\Qproject\\Observer\\dist\\f005-20261010\\Observer\\Observer-diagnostic.exe",
+        "--check-resources",
+        "--load-native",
+        "--data-dir",
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-native-approved\\隔离 用户数据\\Observer\\product",
+        "--report",
+        "C:\\Qproject\\Observer\\artifacts\\phase-f\\f005-native-approved\\original-native.json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "label": "relocated-desktop",
+      "command": [
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-native-approved\\中文 空格程序\\Observer\\Observer-diagnostic.exe",
+        "--self-test",
+        "--load-native",
+        "--data-dir",
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-native-approved\\隔离 用户数据\\Observer\\product",
+        "--report",
+        "C:\\Qproject\\Observer\\artifacts\\phase-f\\f005-native-approved\\relocated-desktop.json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "label": "replacement-windowed",
+      "command": [
+        "C:\\Qproject\\Observer\\dist\\f005-20261010\\Observer\\Observer.exe",
+        "--self-test",
+        "--data-dir",
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-native-approved\\隔离 用户数据\\Observer\\product",
+        "--report",
+        "C:\\Qproject\\Observer\\artifacts\\phase-f\\f005-native-approved\\replacement-windowed.json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "label": "rollback-windowed",
+      "command": [
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-native-approved\\中文 空格程序\\Observer\\Observer.exe",
+        "--self-test",
+        "--data-dir",
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-native-approved\\隔离 用户数据\\Observer\\product",
+        "--report",
+        "C:\\Qproject\\Observer\\artifacts\\phase-f\\f005-native-approved\\rollback-windowed.json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "label": "missing-model",
+      "command": [
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-native-approved\\中文 空格程序\\Observer\\Observer-diagnostic.exe",
+        "--check-resources",
+        "--data-dir",
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-native-approved\\隔离 用户数据\\Observer\\product",
+        "--report",
+        "C:\\Qproject\\Observer\\artifacts\\phase-f\\f005-native-approved\\missing-model.json"
+      ],
+      "exit_code": 1
+    }
+  ],
+  "audit": {
+    "file_count": 1177,
+    "bytes": 488650968,
+    "suspicious_paths": []
+  },
+  "same_build_replacement_and_return": "passed (not cross-schema rollback)",
+  "status": "passed",
+  "finished_utc": "2026-10-11T01:42:55.451483+00:00"
+}

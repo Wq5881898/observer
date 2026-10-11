@@ -1,0 +1,10 @@
+{
+  "started_utc": "2026-10-11T01:42:38.674255+00:00",
+  "executable": "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-approved\\中文 空格程序\\Observer\\Observer-diagnostic.exe",
+  "frozen": true,
+  "camera_opened": false,
+  "status": "failed",
+  "error": "默认配置与 C 冻结身份不一致；未打开摄像头",
+  "traceback": "Traceback (most recent call last):\n  File \"frozen_diagnostics.py\", line 219, in run\n  File \"frozen_diagnostics.py\", line 19, in check_resources\n  File \"observer\\product_cli.py\", line 225, in load_frozen_config\nValueError: 默认配置与 C 冻结身份不一致；未打开摄像头\n",
+  "finished_utc": "2026-10-11T01:42:38.945711+00:00"
+}

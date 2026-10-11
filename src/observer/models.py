@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +12,14 @@ class ModelFiles:
     face: Path
     pose: Path
     object: Path
+
+
+def mediapipe_asset_options(path: str | Path) -> dict:
+    """Avoid the Windows Tasks native narrow-path loader for Unicode paths."""
+    path = Path(path)
+    if platform.system() == 'Windows' and not str(path.resolve()).isascii():
+        return {'model_asset_buffer': path.read_bytes()}
+    return {'model_asset_path': str(path)}
 
 
 def sha256_file(path: Path) -> str:

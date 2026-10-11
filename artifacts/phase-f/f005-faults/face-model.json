@@ -1,0 +1,10 @@
+{
+  "started_utc": "2026-10-11T01:42:39.644141+00:00",
+  "executable": "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-approved\\中文 空格程序\\Observer\\Observer-diagnostic.exe",
+  "frozen": true,
+  "camera_opened": false,
+  "status": "failed",
+  "error": "SHA-256 mismatch: face_landmarker.task; manifest is missing valid model ids: ['face']",
+  "traceback": "Traceback (most recent call last):\n  File \"frozen_diagnostics.py\", line 219, in run\n  File \"frozen_diagnostics.py\", line 18, in check_resources\n  File \"observer\\product_cli.py\", line 239, in verify_frozen_models\n  File \"observer\\models.py\", line 61, in verify_model_directory\nRuntimeError: SHA-256 mismatch: face_landmarker.task; manifest is missing valid model ids: ['face']\n",
+  "finished_utc": "2026-10-11T01:42:39.956522+00:00"
+}

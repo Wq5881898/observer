@@ -1,7 +1,6 @@
 """One-window Qt frontend. SQLite and inference belong to the worker thread."""
 from __future__ import annotations
 
-import hashlib
 import html
 import io
 import json
@@ -38,6 +37,7 @@ from observer.desktop_tray import DesktopTray
 from observer.desktop_ipc import SingleInstanceWake
 from observer.runtime_watch import RuntimeWatch
 from observer.power_events import WindowsPowerEventFilter
+from observer.deployment import source_identity
 
 STATES = {'idle': '等待开始', 'monitoring': '观察中', 'paused': '已暂停',
           'resting': '计划休息中',
@@ -162,10 +162,10 @@ def summary_text(result):
 
 
 def _reminder_wave(health: bool) -> bytes:
-    """Build a short PCM tone; health reminders are deliberately quieter."""
+    """Build one gentle health tone or two distinct violation tones."""
     sample_rate = 16_000
     frequency = 660.0 if health else 880.0
-    duration = .12 if health else .24
+    duration = .12
     amplitude = .10 if health else .28
     sample_count = round(sample_rate * duration)
     fade_samples = max(1, round(sample_rate * .012))
@@ -176,6 +176,10 @@ def _reminder_wave(health: bool) -> bytes:
         value = round(32767 * amplitude * envelope *
                       math.sin(2 * math.pi * frequency * index / sample_rate))
         frames.extend(struct.pack('<h', value))
+    if not health:
+        # Keep both beeps in one wave so playback cannot overlap itself.
+        silence = bytes(round(sample_rate * .08) * 2)
+        frames = frames + silence + frames
     output = io.BytesIO()
     with wave.open(output, 'wb') as stream:
         stream.setnchannels(1)
@@ -192,7 +196,7 @@ def play_reminder_sound(rule_id: str):
         try:
             import winsound
             sound = _reminder_wave(health)
-            # SND_MEMORY playback is synchronous. The tones are capped at 240 ms,
+            # SND_MEMORY playback is synchronous. The tones are capped at 320 ms,
             # so play here instead of acknowledging delivery before a background
             # thread has actually attempted the Windows audio call.
             winsound.PlaySound(sound, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
@@ -200,6 +204,8 @@ def play_reminder_sound(rule_id: str):
         except (ImportError, RuntimeError):
             pass
     QApplication.beep()
+    if not health:
+        QTimer.singleShot(200, QApplication.beep)
 
 
 def data_status_text(status):
@@ -503,11 +509,7 @@ class DesktopWorker(QThread):
                     'cancelled', time.monotonic()-preparation_started)
                 return
             identity = dict(self.source.identity)
-            digest = hashlib.sha256()
-            for path in sorted(Path(__file__).parent.glob('*.py')):
-                digest.update(path.name.encode())
-                digest.update(path.read_bytes())
-            identity['source_tree_sha256'] = digest.hexdigest()
+            identity.update(source_identity())
             preparation_seconds = time.monotonic()-preparation_started
             identity['product_startup_seconds'] = round(preparation_seconds, 3)
             self.last_session_id = self.service.start(

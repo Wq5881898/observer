@@ -1,0 +1,28 @@
+[
+  {
+    "importer": "PySide6\\Qt6Core.dll",
+    "dependency": "icuuc.dll",
+    "missing_exports": [
+      "ucnv_open",
+      "ucnv_close",
+      "UCNV_FROM_U_CALLBACK_SUBSTITUTE",
+      "UCNV_TO_U_CALLBACK_SUBSTITUTE",
+      "ucnv_reset",
+      "ucnv_getMaxCharSize",
+      "ucnv_getName",
+      "ucnv_getToUCallBack",
+      "ucnv_getFromUCallBack",
+      "ucnv_setToUCallBack",
+      "ucnv_setFromUCallBack",
+      "ucnv_cbToUWriteUChars",
+      "ucnv_toUnicode",
+      "ucnv_cbFromUWriteUChars",
+      "ucnv_toUCountPending",
+      "ucnv_fromUCountPending",
+      "ucnv_getStandardName",
+      "ucnv_getAvailableName",
+      "ucnv_countAvailable",
+      "ucnv_fromUnicode"
+    ]
+  }
+]

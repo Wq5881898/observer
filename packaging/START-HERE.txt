@@ -1,0 +1,19 @@
+Observer 0.1.0 — F 内部候选（未正式发布）
+
+保留整个文件夹。双击 Observer.exe 打开桌面窗口。
+真实摄像头补验目前暂缓；内部测试请使用模拟启动命令：
+Observer.exe product --data-dir "C:\你的隔离目录" gui --demo
+
+默认数据：%LOCALAPPDATA%\Observer\product
+默认个人校准：%LOCALAPPDATA%\Observer\calibration\default.json
+旧版 data\product 和校准文件不会自动迁移或覆盖。
+模型/默认配置在 _internal；请勿移动、替换或重写它们。
+
+关闭窗口在托盘可用时隐藏；使用“退出程序”完全退出。
+启动日志位于数据目录 logs\launcher.log；工作线程准备日志为 logs\startup.jsonl。
+出错可从终端使用 Observer-diagnostic.exe 加相同参数查看诊断。
+
+替换/回退：先完全退出全部实例，再换整个程序文件夹，保留用户数据目录。
+首轮仅在合成数据上验证；这不保证未来数据库版本可向下兼容。
+本候选无需管理员权限，没有安装器、启动项或自动更新。
+E 的设备恢复/60 分钟补验、打包人工点验和许可审查未完成，不供公开分发。

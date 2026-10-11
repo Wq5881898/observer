@@ -23,6 +23,7 @@ from observer.config import load_config
 from observer.product import NAMES, ProductStore, RuntimeLock, SessionService, utc_now, utc_text
 from observer.resources import SessionResourceTracker
 from observer.rules import ActionKind, RulePhase
+from observer.deployment import default_data_dir, default_models_dir, default_profile, source_identity
 
 FROZEN_MODEL = Path('models/yolo/observer-phone-s304-e2b.onnx')
 FROZEN_SHA = 'c4a8a791e227780b334e075d671d4347ed9d5fee7474d6f017659366709c486f'
@@ -203,10 +204,12 @@ class FocusEvidenceRecorder:
         return captured
 
 
-def apply_default_profile(args, candidate: Path = DEFAULT_PROFILE):
+def apply_default_profile(args, candidate: Path | None = None):
     """Use this machine's saved calibration unless the operator opts out."""
     if args.demo or args.profile or getattr(args, 'no_profile', False):
         return args.profile
+    if candidate is None:
+        candidate = default_profile()
     if candidate.is_file():
         args.profile = candidate
     return args.profile
@@ -644,23 +647,23 @@ def show_summary(result):
 
 def register_parser(subparsers):
     parser = subparsers.add_parser('product', help='极简单次任务、会话和历史记录')
-    parser.add_argument('--data-dir', type=Path, default=Path('data/product'))
+    parser.add_argument('--data-dir', type=Path, default=default_data_dir())
     commands = parser.add_subparsers(dest='product_command', required=True)
     run = commands.add_parser('run', help='打开控制台运行窗口')
     run.add_argument('--demo', action='store_true', help='仅使用模拟信号，不打开摄像头')
-    run.add_argument('--models-dir', type=Path, default=Path('models'))
-    run.add_argument('--profile', type=Path, help='指定个人校准；默认自动采用 data/calibration/default.json')
+    run.add_argument('--models-dir', type=Path, default=default_models_dir())
+    run.add_argument('--profile', type=Path, help='指定个人校准；默认采用当前部署的用户校准路径')
     run.add_argument('--no-profile', action='store_true', help='忽略默认校准，仅启用离席和可见手机')
     gui = commands.add_parser('gui', help='打开极简桌面窗口')
     gui.add_argument('--demo', action='store_true', help='模拟模式，不打开摄像头')
-    gui.add_argument('--models-dir', type=Path, default=Path('models'))
+    gui.add_argument('--models-dir', type=Path, default=default_models_dir())
     gui.add_argument('--profile', type=Path)
     gui.add_argument('--no-profile', action='store_true', help='忽略默认校准，仅启用离席和可见手机')
     check = commands.add_parser('check', help='在临时目录执行产品负载检查')
     check.add_argument('--seconds', type=float, default=15,
                        help='检查时长，0.1至3600秒；3600秒启用D5长期资源门')
     check.add_argument('--demo', action='store_true', help='模拟模式，不打开摄像头')
-    check.add_argument('--models-dir', type=Path, default=Path('models'))
+    check.add_argument('--models-dir', type=Path, default=default_models_dir())
     check.add_argument('--profile', type=Path)
     check.add_argument('--no-profile', action='store_true', help='忽略默认校准，仅启用硬信号')
     commands.add_parser('history', help='最近100次会话')
@@ -831,12 +834,7 @@ def run_console(args, store, lock):
             source = open_source()
             try:
                 identity = dict(source.identity)
-                files = sorted(Path(__file__).parent.glob('*.py'))
-                digest = hashlib.sha256()
-                for path in files:
-                    digest.update(path.name.encode())
-                    digest.update(path.read_bytes())
-                identity['source_tree_sha256'] = digest.hexdigest()
+                identity.update(source_identity())
                 identifier = service.start(
                     title, minutes, time.monotonic(), utc_now(), identity, task_id,
                     break_every_minutes, break_minutes, allow_offscreen)

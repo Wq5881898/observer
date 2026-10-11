@@ -10,7 +10,7 @@ from typing import Any
 from observer.calibration import AttentionSessionBaseline, CalibrationProfile
 from observer.config import InferenceConfig
 from observer.fusion import ObservationFusion
-from observer.models import ModelFiles
+from observer.models import ModelFiles, mediapipe_asset_options
 from observer.object_detection import (
     MediaPipeEfficientDetBackend,
     ObjectDetectorBackend,
@@ -114,7 +114,7 @@ class MediapipeVisionProbe:
         mode = vision.RunningMode.VIDEO
         self._face = vision.FaceLandmarker.create_from_options(
             vision.FaceLandmarkerOptions(
-                base_options=mp.tasks.BaseOptions(model_asset_path=str(models.face)),
+                base_options=mp.tasks.BaseOptions(**mediapipe_asset_options(models.face)),
                 running_mode=mode,
                 num_faces=1,
                 min_face_detection_confidence=rates.face_detection_confidence,
@@ -126,7 +126,7 @@ class MediapipeVisionProbe:
         )
         self._pose = vision.PoseLandmarker.create_from_options(
             vision.PoseLandmarkerOptions(
-                base_options=mp.tasks.BaseOptions(model_asset_path=str(models.pose)),
+                base_options=mp.tasks.BaseOptions(**mediapipe_asset_options(models.pose)),
                 running_mode=mode,
                 num_poses=1,
                 output_segmentation_masks=False,
@@ -135,7 +135,7 @@ class MediapipeVisionProbe:
         if object_backend is None:
             object_detector = vision.ObjectDetector.create_from_options(
                 vision.ObjectDetectorOptions(
-                    base_options=mp.tasks.BaseOptions(model_asset_path=str(models.object)),
+                    base_options=mp.tasks.BaseOptions(**mediapipe_asset_options(models.object)),
                     running_mode=mode,
                     max_results=4,
                     score_threshold=phone_score_threshold,
@@ -155,7 +155,7 @@ class MediapipeVisionProbe:
         if not getattr(object_backend, 'supports_person_detection', False):
             person_detector = vision.ObjectDetector.create_from_options(
                 vision.ObjectDetectorOptions(
-                    base_options=mp.tasks.BaseOptions(model_asset_path=str(models.object)),
+                    base_options=mp.tasks.BaseOptions(**mediapipe_asset_options(models.object)),
                     running_mode=mode,
                     max_results=4,
                     score_threshold=0.25,

@@ -1,0 +1,56 @@
+{
+    "started_utc":  "2026-10-11T02:00:13.2730079Z",
+    "status":  "passed",
+    "scope":  "camera-free automated internal candidate checks",
+    "independent_machine_declared":  false,
+    "independent_machine_verified_automatically":  false,
+    "windows_version":  "Microsoft Windows NT 10.0.26200.0",
+    "powershell_version":  "5.1.26100.9444",
+    "process_64bit":  true,
+    "elevated_token":  false,
+    "sanitized_path":  "C:\\Windows\\System32",
+    "camera_opened":  false,
+    "runs":  [
+                 {
+                     "executable":  "Observer-diagnostic.exe",
+                     "arguments":  [
+                                       "--self-test",
+                                       "--load-native",
+                                       "--data-dir",
+                                       "C:\\Qproject\\Observer\\build\\phase-f-tests\\portable-export-roundtrip\\中文 独立验收包\\validation-results\\20261011T020013195Z-63e6acc6\\isolated-appdata\\Observer\\product",
+                                       "--report",
+                                       "C:\\Qproject\\Observer\\build\\phase-f-tests\\portable-export-roundtrip\\中文 独立验收包\\validation-results\\20261011T020013195Z-63e6acc6\\diagnostic-native.json"
+                                   ],
+                     "started_utc":  "2026-10-11T02:00:29.2053328Z",
+                     "finished_utc":  "2026-10-11T02:00:44.1001439Z",
+                     "exit_code":  0
+                 },
+                 {
+                     "executable":  "Observer.exe",
+                     "arguments":  [
+                                       "--self-test",
+                                       "--data-dir",
+                                       "C:\\Qproject\\Observer\\build\\phase-f-tests\\portable-export-roundtrip\\中文 独立验收包\\validation-results\\20261011T020013195Z-63e6acc6\\isolated-appdata\\Observer\\product",
+                                       "--report",
+                                       "C:\\Qproject\\Observer\\build\\phase-f-tests\\portable-export-roundtrip\\中文 独立验收包\\validation-results\\20261011T020013195Z-63e6acc6\\windowed-native.json"
+                                   ],
+                     "started_utc":  "2026-10-11T02:00:44.1467674Z",
+                     "finished_utc":  "2026-10-11T02:00:54.8427226Z",
+                     "exit_code":  0
+                 }
+             ],
+    "manual_checks":  "pending; see manual-results.json",
+    "inventory_files":  1177,
+    "manifest_sha256":  "bafeeaeda85b2fec6ec44f570feee725b2f3f0d7b47a046aa7b04e04db055618",
+    "build_id":  "f005-20261010",
+    "source_tree_sha256":  "49aa3165762217379f0146e95f088aab9cf04df5c69f3dad85c05f1c76c32ed2",
+    "native_versions":  {
+                            "cv2":  "4.11.0",
+                            "numpy":  "1.26.4",
+                            "onnxruntime":  "1.29.0",
+                            "mediapipe":  "0.10.21",
+                            "synthetic_frame_inference":  true,
+                            "camera_opened":  false
+                        },
+    "finished_utc":  "2026-10-11T02:01:03.4764165Z"
+}

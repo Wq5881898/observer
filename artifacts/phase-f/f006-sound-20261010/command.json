@@ -1,0 +1,12 @@
+[
+  "C:\\Qproject\\Observer\\build\\phase-f-env\\Scripts\\python.exe",
+  "-m",
+  "PyInstaller",
+  "--clean",
+  "--noconfirm",
+  "--distpath",
+  "C:\\Qproject\\Observer\\dist\\f006-sound-20261010",
+  "--workpath",
+  "C:\\Qproject\\Observer\\build\\phase-f\\f006-sound-20261010\\work",
+  "C:\\Qproject\\Observer\\packaging\\Observer.spec"
+]

@@ -1,0 +1,12 @@
+{
+    "status":  "pending",
+    "build_id":  "f006-sound-20261010",
+    "independent_windows_without_repository_or_python":  "pending",
+    "first_gui_launch_via_shortcut_in_demo":  "pending",
+    "close_hides_to_tray":  "pending",
+    "tray_restore_and_exit":  "pending",
+    "notification_visible_and_click_restores":  "pending",
+    "sound_audible":  "pending",
+    "camera_and_long_run":  "deferred per E handoff",
+    "notes":  "Record what was actually observed. Automated notification calls do not confirm delivery or audibility."
+}

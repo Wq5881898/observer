@@ -3,11 +3,29 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from observer.models import verify_model_directory
+from observer.models import verify_model_directory, mediapipe_asset_options
 
 
 class ModelManifestTests(unittest.TestCase):
+    def test_windows_unicode_model_preserves_bytes_and_reports_missing(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch('observer.models.platform.system', return_value='Windows'):
+            path = Path(temporary)/'中文 模型.task'
+            raw = b'\x00\xffunchanged frozen model bytes'
+            path.write_bytes(raw)
+            self.assertEqual(mediapipe_asset_options(path), {'model_asset_buffer': raw})
+            self.assertEqual(path.read_bytes(), raw)
+            path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                mediapipe_asset_options(path)
+
+    def test_ascii_model_keeps_path_loading(self):
+        with patch('observer.models.platform.system', return_value='Windows'):
+            path = Path('C:/observer/models/face.task')
+            self.assertEqual(mediapipe_asset_options(path), {'model_asset_path': str(path)})
+
     def test_manifest_hashes_are_verified(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

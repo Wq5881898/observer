@@ -130,6 +130,22 @@ class NotificationTests(unittest.TestCase):
             self.assertIn('60 分钟', notify.call_args_list[0].args[0])
             self.assertIn('启动失败', notify.call_args_list[1].args[0])
 
+    def test_scheduled_due_reaches_system_channel_while_hidden_and_running(self):
+        from observer.product import ProductStore, utc_now
+        self.window.hide()
+        with patch.object(self.window.tray, 'notify', return_value='本次通知已提交') as notify:
+            store = ProductStore(Path(self.temp.name))
+            try:
+                store.add_task('隐藏窗口正常启动', utc_now() + timedelta(seconds=.2), 1)
+            finally:
+                store.close()
+            self.wait_for(lambda: notify.call_count == 1)
+            self.wait_for(lambda: self.window.state == 'monitoring')
+            notify.assert_called_once()
+            self.assertIn('学习时间到了：隐藏窗口正常启动', notify.call_args.args[0])
+            self.assertEqual(self.window.notification_status.text(), '本次通知已提交')
+            self.assertFalse(self.window.isVisible())
+
     def test_manual_start_does_not_send_task_notification(self):
         with patch.object(self.window.tray, 'notify') as notify:
             self.window.start.click()

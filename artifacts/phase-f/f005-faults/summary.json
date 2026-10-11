@@ -1,0 +1,52 @@
+{
+  "time_utc": "2026-10-11T01:42:40.935376+00:00",
+  "results": [
+    {
+      "label": "configuration",
+      "command": [
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-approved\\中文 空格程序\\Observer\\Observer-diagnostic.exe",
+        "--check-resources",
+        "--load-native",
+        "--data-dir",
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-faults\\isolated-data",
+        "--report",
+        "C:\\Qproject\\Observer\\artifacts\\phase-f\\f005-faults\\configuration.json"
+      ],
+      "exit_code": 1,
+      "status": "failed",
+      "error": "默认配置与 C 冻结身份不一致；未打开摄像头"
+    },
+    {
+      "label": "face-model",
+      "command": [
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-approved\\中文 空格程序\\Observer\\Observer-diagnostic.exe",
+        "--check-resources",
+        "--load-native",
+        "--data-dir",
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-faults\\isolated-data",
+        "--report",
+        "C:\\Qproject\\Observer\\artifacts\\phase-f\\f005-faults\\face-model.json"
+      ],
+      "exit_code": 1,
+      "status": "failed",
+      "error": "SHA-256 mismatch: face_landmarker.task; manifest is missing valid model ids: ['face']"
+    },
+    {
+      "label": "missing-native",
+      "command": [
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-approved\\中文 空格程序\\Observer\\Observer-diagnostic.exe",
+        "product",
+        "--data-dir",
+        "C:\\Qproject\\Observer\\build\\phase-f-tests\\f005-faults\\isolated-data",
+        "gui",
+        "--demo"
+      ],
+      "exit_code": 1
+    }
+  ],
+  "resources_restored": true,
+  "created_databases": [],
+  "launcher_log_exists": true,
+  "administrator_token": false,
+  "status": "passed"
+}

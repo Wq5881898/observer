@@ -1,0 +1,32 @@
+{
+  "started_utc": "2026-10-11T01:40:39.418312+00:00",
+  "executable": "C:\\Qproject\\Observer\\dist\\f005-20261010\\Observer\\Observer-diagnostic.exe",
+  "frozen": true,
+  "camera_opened": false,
+  "resources": {
+    "identity": {
+      "source_tree_sha256": "49aa3165762217379f0146e95f088aab9cf04df5c69f3dad85c05f1c76c32ed2",
+      "source_identity_origin": "build-input-manifest",
+      "build_info_sha256": "13c3a136024bf7fafc1df9dae7c0cb9f00cc99ceb50ef5bec5e66b805449b4b5",
+      "build_id": "f005-20261010"
+    },
+    "resource_root": "C:\\Qproject\\Observer\\dist\\f005-20261010\\Observer\\_internal",
+    "model_hashes": {
+      "efficientdet_lite0_int8.tflite": "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb",
+      "face_landmarker.task": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "manifest.json": "b049addf45643a8b2feff4281be0a1aede74ab45c7d49aa2f95a930572c9fb59",
+      "pose_landmarker_lite.task": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+      "yolo\\observer-phone-s304-e2b.onnx": "c4a8a791e227780b334e075d671d4347ed9d5fee7474d6f017659366709c486f"
+    },
+    "native": {
+      "cv2": "4.11.0",
+      "numpy": "1.26.4",
+      "onnxruntime": "1.29.0",
+      "mediapipe": "0.10.21",
+      "synthetic_frame_inference": true,
+      "camera_opened": false
+    }
+  },
+  "status": "passed",
+  "finished_utc": "2026-10-11T01:40:43.704746+00:00"
+}

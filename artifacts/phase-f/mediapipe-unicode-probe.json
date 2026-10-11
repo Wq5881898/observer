@@ -1,0 +1,15 @@
+[
+  {
+    "case": "ascii-path",
+    "status": "passed"
+  },
+  {
+    "case": "unicode-path",
+    "status": "failed",
+    "error": "Unable to open file at C:\\Qproject\\Observer\\build\\phase-f-mp-unicode\\中文 模型\\face_landmarker.task"
+  },
+  {
+    "case": "unicode-buffer",
+    "status": "passed"
+  }
+]

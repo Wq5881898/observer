@@ -1,0 +1,14 @@
+test_closed_server_no_longer_accepts_wake (test_desktop_ipc.DesktopIpcTests.test_closed_server_no_longer_accepts_wake) ... ok
+test_exact_show_request_activates_once (test_desktop_ipc.DesktopIpcTests.test_exact_show_request_activates_once) ... ok
+test_incomplete_request_expires_and_next_valid_client_activates_once (test_desktop_ipc.DesktopIpcTests.test_incomplete_request_expires_and_next_valid_client_activates_once) ... ok
+test_malformed_requests_close_without_activation_or_response (test_desktop_ipc.DesktopIpcTests.test_malformed_requests_close_without_activation_or_response) ... ok
+test_other_data_directory_does_not_connect (test_desktop_ipc.DesktopIpcTests.test_other_data_directory_does_not_connect) ... ok
+test_show_with_oversized_suffix_is_rejected_without_activation (test_desktop_ipc.DesktopIpcTests.test_show_with_oversized_suffix_is_rejected_without_activation) ... ok
+test_split_show_request_activates_once (test_desktop_ipc.DesktopIpcTests.test_split_show_request_activates_once) ... ok
+test_successful_wake_returns_before_window_or_worker_creation (test_desktop_ipc.DesktopIpcTests.test_successful_wake_returns_before_window_or_worker_creation) ... ok
+test_wake_name_is_stable_per_resolved_data_directory (test_desktop_ipc.DesktopIpcTests.test_wake_name_is_stable_per_resolved_data_directory) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 6.820s
+
+OK

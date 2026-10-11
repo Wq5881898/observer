@@ -340,12 +340,44 @@ class DesktopTests(unittest.TestCase):
         winsound_stub = SimpleNamespace(
             SND_MEMORY=0x4, SND_NODEFAULT=0x2,
             PlaySound=Mock(side_effect=RuntimeError('audio device unavailable')))
-        with patch('observer.desktop.os.name', 'nt'), \
-             patch.dict(sys.modules, {'winsound': winsound_stub}), \
-             patch('observer.desktop.QApplication.beep') as beep:
-            play_reminder_sound('focus_violation')
+        for rule_id, double in (('focus_violation', True), ('posture_deviation', False)):
+            with self.subTest(rule_id=rule_id), \
+                 patch('observer.desktop.os.name', 'nt'), \
+                 patch.dict(sys.modules, {'winsound': winsound_stub}), \
+                 patch('observer.desktop.QApplication.beep') as beep, \
+                 patch('observer.desktop.QTimer.singleShot') as delayed:
+                play_reminder_sound(rule_id)
+                beep.assert_called_once_with()
+                if double:
+                    delayed.assert_called_once_with(200, beep)
+                    delayed.call_args.args[1]()
+                    self.assertEqual(beep.call_count, 2)
+                else:
+                    delayed.assert_not_called()
 
-        beep.assert_called_once_with()
+    def test_windows_violation_has_two_tones_and_posture_has_one(self):
+        import sys
+        import wave
+        from io import BytesIO
+        from observer.desktop import play_reminder_sound
+
+        for rule_id, expected in (('phone_held', 2), ('away', 2), ('posture_deviation', 1)):
+            with self.subTest(rule_id=rule_id):
+                play_sound = Mock()
+                stub = SimpleNamespace(SND_MEMORY=4, SND_NODEFAULT=2, PlaySound=play_sound)
+                with patch('observer.desktop.os.name', 'nt'), patch.dict(sys.modules, {'winsound': stub}):
+                    play_reminder_sound(rule_id)
+                play_sound.assert_called_once()
+                with wave.open(BytesIO(play_sound.call_args.args[0]), 'rb') as stream:
+                    self.assertEqual((stream.getnchannels(), stream.getsampwidth()), (1, 2))
+                    chunk_frames = round(stream.getframerate() * .02)
+                    audible = []
+                    while frames := stream.readframes(chunk_frames):
+                        audible.append(any(frames))
+                    starts = sum(active and (index == 0 or not audible[index-1])
+                                 for index, active in enumerate(audible))
+                    self.assertEqual(starts, expected)
+                    self.assertLessEqual(stream.getnframes()/stream.getframerate(), .32)
 
     def test_health_reminder_is_quiet_short_and_does_not_flash_window(self):
         import wave
@@ -735,14 +767,29 @@ class DesktopTests(unittest.TestCase):
         self.open(TrackedSource)
         self.window.start.click()
         self.wait_for(lambda: self.window.state == 'monitoring')
+        interrupted_id = self.window.worker.service.identifier
         self.window.worker.note_power_transition('模拟系统挂起或唤醒')
         self.wait_for(lambda: self.window.state == 'idle')
         self.assertEqual(closed, [True])
         store = ProductStore(self.args.data_dir)
         try:
-            summary = store.summary(store.history()[0]['id'])
+            summary = store.summary(interrupted_id)
             self.assertEqual(summary['state'], 'interrupted')
             self.assertEqual(summary['error'], '模拟系统挂起或唤醒')
+            self.assertEqual(summary['violation_seconds'], 0)
+            self.assertEqual(summary['actions'], [])
+        finally:
+            store.close()
+        self.window.start.click()
+        self.wait_for(lambda: self.window.state == 'monitoring')
+        self.assertNotEqual(self.window.worker.service.identifier, interrupted_id)
+        self.window.end.click()
+        self.wait_for(lambda: self.window.state == 'idle')
+        self.assertEqual(closed, [True, True])
+        store = ProductStore(self.args.data_dir)
+        try:
+            self.assertEqual([row['state'] for row in store.history()],
+                             ['ended', 'interrupted'])
         finally:
             store.close()
 

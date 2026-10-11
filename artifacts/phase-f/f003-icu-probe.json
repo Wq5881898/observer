@@ -1,0 +1,26 @@
+{
+  "started_utc": "2026-10-11T01:30:24.282404+00:00",
+  "executable": "C:\\Qproject\\Observer\\build\\phase-f-tests\\f003-full\\中文 空格程序\\Observer\\Observer-diagnostic.exe",
+  "frozen": true,
+  "camera_opened": false,
+  "resources": {
+    "identity": {
+      "source_tree_sha256": "95b670f289cfbd61d2d8a901cb3972cd027438a2f80d6797c60606c2bbc95dd6",
+      "source_identity_origin": "build-input-manifest",
+      "build_info_sha256": "0be1c9a841fd5f1b46fff25f0c00387baa2ba015416ccb2743edced01d8c7853",
+      "build_id": "f003-20261010"
+    },
+    "resource_root": "C:\\Qproject\\Observer\\build\\phase-f-tests\\f003-full\\中文 空格程序\\Observer\\_internal",
+    "model_hashes": {
+      "efficientdet_lite0_int8.tflite": "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb",
+      "face_landmarker.task": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "manifest.json": "b049addf45643a8b2feff4281be0a1aede74ab45c7d49aa2f95a930572c9fb59",
+      "pose_landmarker_lite.task": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+      "yolo\\observer-phone-s304-e2b.onnx": "c4a8a791e227780b334e075d671d4347ed9d5fee7474d6f017659366709c486f"
+    }
+  },
+  "status": "failed",
+  "error": "Test directory already has an instance",
+  "traceback": "Traceback (most recent call last):\n  File \"frozen_diagnostics.py\", line 200, in run\n  File \"frozen_diagnostics.py\", line 63, in desktop_smoke\nRuntimeError: Test directory already has an instance\n",
+  "finished_utc": "2026-10-11T01:30:25.669126+00:00"
+}

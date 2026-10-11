@@ -1,0 +1,19 @@
+{
+  "started_utc": "2026-10-11T02:16:09.254188+00:00",
+  "finished_utc": "2026-10-11T02:16:56.346731+00:00",
+  "status": "exported and archive integrity verified; independent machine run pending",
+  "archive": "C:\\Qproject\\Observer\\dist\\f006-sound-validation-20261010.zip",
+  "bytes": 218760036,
+  "sha256": "8370f55f3c95c0b3d21fc5ac873d47e13d992da250b6f5226257454aba10ab47",
+  "candidate_build_id": "f006-sound-20261010",
+  "candidate_manifest_sha256": "8ef5e8cb44bb90cddeeee91333c60755099f7f54be574a3d1298a3617659d462",
+  "candidate_files": 1177,
+  "tools": {
+    "validate_windows_portable.ps1": "c9f93b2b76f27b90a4e35aea7c8d9b692f7795ab6f10233ab4c1750fabb43585",
+    "PORTABLE-VALIDATION.txt": "b7fb41ee23622839ab58099300e211d7d6c0b222f462fc74cc20f7b438e327a4"
+  },
+  "archive_crc_verified": true,
+  "archived_candidate_hashes_verified": true,
+  "camera_opened": false,
+  "redistribution_review": "pending; internal candidate only"
+}
