@@ -50,6 +50,8 @@ F 继续工作（2026-10-10）：已准备内部 ZIP 转移包和无需 Python/�
 
 F 预发布授权（2026-10-10）：项目所有者要求“先打包发布一个版本，同时到 GitHub”。按该授权准备 `v0.1.0-preview.1`，采用已验证的 f006 便携包，发布至现有私有仓库并同步对应源码。该次授权允许私有预发布先行；E/F 阶段验收、公开分发许可及真实摄像头/长测安排不变。版本内容及构建来源见 [发布说明](releases/v0.1.0-preview.1.md)。
 
+F 预发布完成（2026-10-10）：[v0.1.0-preview.1](https://github.com/Wq5881898/observer/releases/tag/v0.1.0-preview.1) 已发布为非草稿的私有预发布版，源码标签指向 `925aaaf453e9fbf460643f917b859200ecfc7109`。Windows ZIP、校验文件和构建记录三个附件的 GitHub 摘要与本地一致，详见[发布核验记录](../artifacts/phase-f/github-v0.1.0-preview.1/published.json)。阶段仍实施中。
+
 ## 4. 已完成阶段的证据
 
 ### A：可行性与技术路线

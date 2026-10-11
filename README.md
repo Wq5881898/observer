@@ -53,7 +53,7 @@ F 已生成 Windows onedir 内部候选，含 GUI 与诊断入口、独立用户
 
 已准备供独立 Windows 环境使用的内部 ZIP 验收包，附 Windows PowerShell 5.1/7 入口，不要求 Python 或源码仓库。操作及人工点验见 [转移验收说明](packaging/PORTABLE-VALIDATION.txt)。本机解压往返已验证；项目所有者确认暂时没有独立环境，干净机器验收继续待测。
 
-2026-10-10 项目所有者授权先发布私有 GitHub 预发布版 `v0.1.0-preview.1` 并同步源码，版本内容及启动说明见 [发布说明](docs/releases/v0.1.0-preview.1.md)，下载入口为仓库 [Releases](https://github.com/Wq5881898/observer/releases)。预发布保留 E/F 待验项，不代表阶段完整签收。
+2026-10-10 已按项目所有者授权发布私有 GitHub 预发布版 [v0.1.0-preview.1](https://github.com/Wq5881898/observer/releases/tag/v0.1.0-preview.1) 并同步源码，版本内容及启动说明见 [发布说明](docs/releases/v0.1.0-preview.1.md)。Release 提供 Windows x64 ZIP、SHA-256 校验文件和构建记录。预发布保留 E/F 待验项，不代表阶段完整签收。
 
 D阶段已于2026-09-21通过并关闭，288项自动验收通过，包括单次及重复任务、会话控制、计划休息、本次延长、离屏豁免、schema v9合并事件、统一姿态事件、时间比例评分、SQLite历史与今日摘要、截图和删除。离屏先发生、手机随后加入的真人场景已确认合并为一个事件，重叠秒数只计算一次。开发版另提供测试取证开关，可在违规候选期间每2秒保存一张复核图片；正式策略为成立的计分事件保存首尾两张、姿态事件最多一张。也可用 `python -m observer product run --demo` 在不打开摄像头的情况下体验；真实模式需安装 `yolo` 依赖并具有冻结模型。具体命令见 [D 阶段使用说明](docs/phase-d-runbook.md)，最终结论见 [D阶段关闭审查](docs/phase-d-closeout-audit-20260921.md)。
 

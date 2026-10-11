@@ -91,3 +91,5 @@ Git 基底为 `6b37f255318b2824fe4294a7d8378e35fe22a51e`，工作区有未提交
 2026-10-10，项目所有者要求先打包发布一个版本并同步 GitHub。现有目标 `Wq5881898/observer` 已确认是私有仓库，没有既有 Release。按新授权准备 `v0.1.0-preview.1`，保留已验证 f006 ZIP 的原始字节，附校验文件和构建记录，并同步对应源码与必要测试/文档。详见[版本发布说明](releases/v0.1.0-preview.1.md)。
 
 此次为私有预发布；不把 E/F 未完成项改记通过，不更改仓库可见性，不启动摄像头或长测。旧包和验证证据保持可追溯，个人数据及无关文件不进入本次新增同步范围。
+
+发布已完成：[v0.1.0-preview.1](https://github.com/Wq5881898/observer/releases/tag/v0.1.0-preview.1)，发布时间为 2026-10-10 20:30:28（America/Denver）。源码已推送 main，版本标签指向 `925aaaf453e9fbf460643f917b859200ecfc7109`。三个附件均为 uploaded，远端 SHA-256、大小与本地逐项一致；Release 非草稿、预发布、仓库仍私有。最终元数据与下载地址见[核验记录](../artifacts/phase-f/github-v0.1.0-preview.1/published.json)。ZIP 沿用 f006 原始字节及原构建身份，发布提交未伪称重新构建。
