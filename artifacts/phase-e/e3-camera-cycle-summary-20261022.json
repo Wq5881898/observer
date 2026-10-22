@@ -1,0 +1,23 @@
+{
+  "classification": "system_device_disable_enable_not_physical_unplug",
+  "passed": true,
+  "phase": "completed",
+  "first_camera_released": true,
+  "second_camera_released": true,
+  "runtime_lock_released": true,
+  "exit_seconds": 0.5780000000004293,
+  "camera_threads_alive": [],
+  "session_count": 2,
+  "session_states": ["ended", "ended"],
+  "session_errors": [null, null],
+  "unavailable_offsets": [24.59400000000005, 37.49888038635254],
+  "violation_seconds_in_observed_gap": 0,
+  "worker_stopped": true,
+  "frames_saved": false,
+  "finished_utc": "2026-10-22T00:41:02.573462+00:00",
+  "raw_observer_report": "artifacts/phase-e/e3-camera-cycle-observer-20261022.json",
+  "raw_observer_report_sha256": "ddb1b96e524cb85691b978add7fa02c154a5529384e799c376e1b9a5c905ecbd",
+  "raw_observer_report_storage": "local only; per-frame signals excluded from Git commit",
+  "device_report": "artifacts/phase-e/e3-camera-cycle-20261022T004032157.json",
+  "device_report_sha256": "146ae2be36ff3c9c98f9ce38c95f128445e5d4ce7d178c6f68c29d0dad33e490"
+}

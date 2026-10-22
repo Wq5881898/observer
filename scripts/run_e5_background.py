@@ -6,7 +6,9 @@ import json
 import math
 import statistics
 import tempfile
+import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +35,19 @@ def wait(app, predicate, timeout, label):
         raise RuntimeError(f'{label} timed out after {timeout:g}s')
 
 
+def result_passes(result):
+    product = result.get('product_resources') or {}
+    return bool(result.get('within_cpu_memory_budget')
+                and product.get('within_budget') and not product.get('sampling_error')
+                and result.get('actual_seconds', 0) >= result['requested_seconds']
+                and result.get('samples', 0) >= 1
+                and result.get('camera_released_after_end')
+                and result.get('camera_thread_stopped')
+                and result.get('runtime_lock_released')
+                and result.get('exit_seconds', float('inf')) <= 5
+                and result.get('session_state') == 'ended')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seconds', type=float, default=60.)
@@ -53,7 +68,18 @@ def main():
     logical_cpus = max(psutil.cpu_count(logical=True) or 1, 1)
     process.cpu_percent(None)
     samples = []
-    result = {'requested_seconds': args.seconds, 'profile': str(profile) if profile else None}
+    result = {'requested_seconds': args.seconds, 'profile': str(profile) if profile else None,
+              'started_utc': datetime.now(timezone.utc).isoformat()}
+
+    def progress(phase, **values):
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.with_suffix('.progress.json').write_text(json.dumps({
+                'phase': phase, 'pid': process.pid, 'started_utc': result['started_utc'],
+                'updated_utc': datetime.now(timezone.utc).isoformat(),
+                'requested_seconds': args.seconds, **values}, indent=2) + '\n', encoding='utf-8')
+
+    progress('starting')
 
     with tempfile.TemporaryDirectory(prefix='observer-e5-') as directory:
         root = Path(directory)
@@ -71,6 +97,7 @@ def main():
             wait(app, lambda: not window.worker.ui_visible, 5, 'background transition')
             started = time.monotonic()
             next_sample = started
+            next_progress = started
             while time.monotonic() - started < args.seconds:
                 app.processEvents()
                 now = time.monotonic()
@@ -84,6 +111,10 @@ def main():
                         'handles': process.num_handles() if hasattr(process, 'num_handles') else None,
                     })
                     next_sample = now + 1
+                    if now >= next_progress:
+                        progress('monitoring', elapsed_seconds=round(now-started, 3),
+                                 state=window.state, sample_count=len(samples), last_sample=samples[-1])
+                        next_progress = now + 60
                 time.sleep(.01)
             result['actual_seconds'] = round(time.monotonic() - started, 3)
             window.send('end')
@@ -94,6 +125,8 @@ def main():
             window.request_exit()
             wait(app, lambda: not window.worker.isRunning(), 30, 'desktop exit')
             result['exit_seconds'] = round(time.monotonic() - exit_started, 3)
+            result['camera_thread_stopped'] = not any(
+                thread.name == 'observer-camera' for thread in threading.enumerate())
             window.close()
             app.processEvents()
             RuntimeLock(root).close()
@@ -107,6 +140,12 @@ def main():
                 store.close()
             result['session_state'] = summary['state']
             result['product_resources'] = summary.get('resource_summary')
+        except Exception as exc:
+            result['error'] = f'{type(exc).__name__}: {exc}'
+            progress('failed', error=result['error'])
+            if args.output:
+                args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+            raise
         finally:
             if window.worker.isRunning():
                 window.request_exit()
@@ -150,17 +189,15 @@ def main():
             and (result['memory_growth_mb_per_hour'] is None
                  or result['memory_growth_mb_per_hour'] <= 50))
 
+    result['passed'] = result_passes(result)
+    result['finished_utc'] = datetime.now(timezone.utc).isoformat()
     rendered = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered + '\n', encoding='utf-8')
     print(rendered)
-    product_budget = result.get('product_resources') or {}
-    return 0 if (result['within_cpu_memory_budget']
-                 and product_budget.get('within_budget', False)
-                 and result['camera_released_after_end']
-                 and result['runtime_lock_released']
-                 and result['session_state'] == 'ended') else 1
+    progress('completed' if result['passed'] else 'failed', passed=result['passed'])
+    return 0 if result['passed'] else 1
 
 
 if __name__ == '__main__':

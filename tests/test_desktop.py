@@ -303,6 +303,39 @@ class DesktopTests(unittest.TestCase):
         self.window.close_event_preview()
         self.assertTrue(self.window.preview_panel.isHidden())
 
+    def test_event_refresh_preserves_scroll_during_evidence_and_duration_updates(self):
+        self.open()
+        self.window.worker.snapshot.disconnect(self.window.update_view)
+        result = {'id': 'session-scroll', 'title': '事件滚动检查'}
+        events = [{
+            'event_id': f'event-{i}', 'rule_id': 'focus_violation',
+            'offset': i * 20., 'resolved_offset': None,
+            'points': 0., 'delivery_state': 'delivered',
+            'image_path': None, 'image_status': '未保存图片',
+            'signals': ['phone_held'], 'violation_seconds': 12.,
+        } for i in range(60)]
+        self.window.update_focus_events(result, events, active=True)
+        self.app.processEvents()
+        scroll = self.window.focus_events.verticalScrollBar()
+        self.assertGreater(scroll.maximum(), 0)
+        for at_bottom in (False, True):
+            with self.subTest(at_bottom=at_bottom):
+                position = scroll.maximum() if at_bottom else scroll.maximum() // 2
+                scroll.setValue(position)
+                events[-1]['violation_seconds'] += 2.
+                events[-1]['images'] = [{'id': f'sample-{at_bottom}', 'sha256': 'abc'}]
+                self.window.update_focus_events(result, events, active=True)
+                self.app.processEvents()
+                self.assertEqual(scroll.value(), position)
+                events.append({**events[-1], 'event_id': f'new-{at_bottom}',
+                               'offset': 2000. + len(events)})
+                self.window.update_focus_events(result, events, active=True)
+                self.app.processEvents()
+                self.assertEqual(scroll.value(), position)
+        self.window.update_focus_events({**result, 'id': 'another-session'}, events, active=True)
+        self.app.processEvents()
+        self.assertEqual(scroll.value(), 0)
+
     def test_reminder_reports_delivery_success_or_failure_to_worker(self):
         self.open()
         with patch.object(self.window.worker, 'submit') as submit:

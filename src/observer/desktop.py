@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QPushButton, QScrollArea, QSpinBox, QTabWidget, QTextBrowser, QTextEdit, QTimeEdit,
     QVBoxLayout, QWidget,
 )
-from tzlocal import get_localzone_name
+from observer.local_timezone import get_localzone_name
 
 from observer.product import NAMES, ProductStore, RuntimeLock, SessionService, minutes_valid, utc_now
 from observer.product_cli import (
@@ -1565,8 +1565,13 @@ class ObserverWindow(QMainWindow):
         self.preview_previous_width = None
 
     def update_focus_events(self, result, events, active=False):
+        session_id = result.get('id') if result else None
+        previous_session_id = (self.focus_event_signature[0]
+                               if self.focus_event_signature else None)
+        scroll_bar = self.focus_events.verticalScrollBar()
+        scroll_position = scroll_bar.value()
         signature = (
-            result.get('id') if result else None,
+            session_id,
             active,
             tuple((item['event_id'], item['rule_id'], item['offset'],
                    item['resolved_offset'], item['points'], item['delivery_state'],
@@ -1639,6 +1644,10 @@ class ObserverWindow(QMainWindow):
                 image = f'<span style="color:#94a3b8">{html.escape(item["image_status"])}</span>'
             lines.append(f'<p>{index}. {label}　{image}</p>')
         self.focus_events.setHtml(''.join(lines))
+        if session_id == previous_session_id:
+            # Evidence samples and live durations rebuild the document. Keep
+            # the user's reading position instead of QTextBrowser's default top.
+            scroll_bar.setValue(scroll_position)
         if not self.event_images:
             self.close_event_preview()
 

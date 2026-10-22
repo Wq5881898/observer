@@ -1,0 +1,42 @@
+﻿{
+    "instance_id":  "USB\\VID_5986\u0026PID_2130\u0026MI_00\\6\u0026E71527D\u00260\u00260000",
+    "started_utc":  "2026-10-22T00:40:32.1854702Z",
+    "classification":  "system_device_disable_enable_not_physical_unplug",
+    "device_command":  "PnPUtil",
+    "disable_attempted":  true,
+    "disabled_verified":  true,
+    "restored_verified":  true,
+    "restart_required":  false,
+    "error":  null,
+    "restore_error":  null,
+    "initial_devnode_status":  25174026,
+    "disable_output":  [
+                           "Microsoft PnP 工具",
+                           "",
+                           "正在禁用设备:          USB\\VID_5986\u0026PID_2130\u0026MI_00\\6\u0026e71527d\u00260\u00260000",
+                           "已成功禁用设备。",
+                           ""
+                       ],
+    "disable_exit_code":  0,
+    "disabled_utc":  "2026-10-22T00:40:39.7346257Z",
+    "disabled_problem":  22,
+    "restore_attempts":  [
+                             {
+                                 "attempt":  1,
+                                 "enable_error":  null,
+                                 "query_error":  null,
+                                 "enable_output":  [
+                                                       "Microsoft PnP 工具",
+                                                       "",
+                                                       "正在启用设备:          USB\\VID_5986\u0026PID_2130\u0026MI_00\\6\u0026e71527d\u00260\u00260000",
+                                                       "已成功启用设备。",
+                                                       ""
+                                                   ],
+                                 "enable_exit_code":  0
+                             }
+                         ],
+    "restore_devnode_status":  25174026,
+    "restored_utc":  "2026-10-22T00:40:53.2869383Z",
+    "restore_attempts_finished_utc":  "2026-10-22T00:40:53.2919393Z",
+    "finished_utc":  "2026-10-22T00:40:53.2919393Z"
+}
