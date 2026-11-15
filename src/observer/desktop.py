@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QPushButton, QScrollArea, QSpinBox, QTabWidget, QTextBrowser, QTextEdit, QTimeEdit,
     QVBoxLayout, QWidget,
 )
-from tzlocal import get_localzone_name
+from observer.local_timezone import get_localzone_name
 
 from observer.product import NAMES, ProductStore, RuntimeLock, SessionService, minutes_valid, utc_now
 from observer.product_cli import (
@@ -38,6 +38,8 @@ from observer.desktop_ipc import SingleInstanceWake
 from observer.runtime_watch import RuntimeWatch
 from observer.power_events import WindowsPowerEventFilter
 from observer.deployment import source_identity
+from observer.updates import current_version
+from observer.update_page import UpdatePage
 
 STATES = {'idle': '等待开始', 'monitoring': '观察中', 'paused': '已暂停',
           'resting': '计划休息中',
@@ -189,23 +191,60 @@ def _reminder_wave(health: bool) -> bytes:
     return output.getvalue()
 
 
-def play_reminder_sound(rule_id: str):
-    """Play a short hard or gentle reminder; keep failures visible to the caller."""
-    health = rule_id in HEALTH_REMINDER_RULES
+def _play_event_sound(sound: bytes, notes, gap_seconds: float):
+    """Finish one sound before returning; never leave deferred alarm beeps."""
     if os.name == 'nt':
         try:
             import winsound
-            sound = _reminder_wave(health)
-            # SND_MEMORY playback is synchronous. The tones are capped at 320 ms,
-            # so play here instead of acknowledging delivery before a background
-            # thread has actually attempted the Windows audio call.
+        except ImportError as exc:
+            raise RuntimeError('Windows 声音服务不可用') from exc
+        try:
             winsound.PlaySound(sound, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
             return
-        except (ImportError, RuntimeError):
+        except RuntimeError:
             pass
-    QApplication.beep()
-    if not health:
-        QTimer.singleShot(200, QApplication.beep)
+        # Preserve both pitch and rhythm if WAV playback fails. A generic
+        # system beep would make completion indistinguishable from an alert.
+        for index, (frequency, duration_ms) in enumerate(notes):
+            if index:
+                time.sleep(gap_seconds)
+            winsound.Beep(frequency, duration_ms)
+        return
+    for index, _note in enumerate(notes):
+        if index:
+            time.sleep(gap_seconds)
+        QApplication.beep()
+
+
+def play_reminder_sound(rule_id: str):
+    """Play a short hard or gentle reminder; keep failures visible to the caller."""
+    health = rule_id in HEALTH_REMINDER_RULES
+    notes = ((660, 120),) if health else ((880, 120), (880, 120))
+    _play_event_sound(_reminder_wave(health), notes, .08)
+
+
+def completion_wave() -> bytes:
+    """A short rising three-note completion chime, distinct from alert beeps."""
+    rate = 16000
+    frames = bytearray()
+    for frequency in (523.25, 659.25, 783.99):
+        count = round(rate * .14)
+        for index in range(count):
+            envelope = max(0., min(1., index / 160, (count-index-1) / 240))
+            value = round(32767 * .22 * envelope * math.sin(2*math.pi*frequency*index/rate))
+            frames.extend(struct.pack('<h', value))
+        frames.extend(bytes(round(rate * .035) * 2))
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(rate)
+        stream.writeframes(frames)
+    return output.getvalue()
+
+
+def play_completion_sound():
+    _play_event_sound(completion_wave(), ((523, 140), (659, 140), (784, 140)), .035)
 
 
 def data_status_text(status):
@@ -374,6 +413,7 @@ class DesktopWorker(QThread):
     busy = Signal(bool)
     reminder = Signal(str, str, str)
     task_notification = Signal(str, str)
+    session_completed = Signal(str, str)
     BUSY_COMMANDS = frozenset({
         'start', 'pause', 'resume', 'end', 'task', 'delete-session', 'purge',
         'plan-save', 'plan-toggle', 'plan-delete',
@@ -746,7 +786,10 @@ class DesktopWorker(QThread):
                     next_plan_refresh = at + 60
                 if (self.service.identifier and self.service.state != 'paused'
                         and at >= self.service.deadline):
+                    identifier = self.service.identifier
+                    title = self.store.summary(identifier)['title']
                     self.finish_session()
+                    self.session_completed.emit(identifier, title)
                     self.notice.emit('计划时间已到，会话已保存')
                     next_publish = 0
                 elif self.service.break_due():
@@ -906,7 +949,8 @@ class ObserverWindow(QMainWindow):
 
     def __init__(self, args, source_factory=None):
         super().__init__()
-        self.setWindowTitle('Observer · 模拟' if args.demo else 'Observer')
+        version, _build = current_version()
+        self.setWindowTitle(f'Observer {version}' + (' · 模拟' if args.demo else ''))
         available = QApplication.primaryScreen().availableGeometry()
         full_height_layout = available.height() >= 952
         self.setMinimumSize(500, 920 if full_height_layout else 650)
@@ -916,6 +960,7 @@ class ObserverWindow(QMainWindow):
         self.hidden_to_tray = False
         self.presented_reminders = set()
         self.presented_task_notifications = set()
+        self.presented_completions = set()
         self.desktop_settings = QSettings(
             str(Path(args.data_dir).resolve() / 'desktop.ini'), QSettings.Format.IniFormat)
         self.blocked = True
@@ -937,7 +982,7 @@ class ObserverWindow(QMainWindow):
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(14)
         root_layout.addWidget(content, 1)
-        header = QLabel('Observer')
+        header = QLabel(f'Observer  {version}')
         header.setStyleSheet('font-size: 24px; font-weight: 600;')
         layout.addWidget(header)
         if args.demo:
@@ -1206,6 +1251,8 @@ class ObserverWindow(QMainWindow):
         advanced_tabs.addTab(task_page, '执行记录')
         advanced_layout.addWidget(advanced_tabs)
         tabs.addTab(advanced_page, '高级计划')
+        self.update_page = UpdatePage(self, args)
+        tabs.addTab(self.update_page, '版本与更新')
         self.history.itemClicked.connect(lambda item: self.worker.submit('show', item.data(Qt.ItemDataRole.UserRole)))
         self.plans.itemClicked.connect(self.load_plan)
         self.plan_recurrence.currentIndexChanged.connect(self.update_plan_fields)
@@ -1274,6 +1321,7 @@ class ObserverWindow(QMainWindow):
         self.worker.notice.connect(self.show_notice)
         self.worker.reminder.connect(self.show_reminder)
         self.worker.task_notification.connect(self.show_task_notification)
+        self.worker.session_completed.connect(self.show_session_completed)
         self.worker.detail.connect(self.details.setPlainText)
         self.worker.busy.connect(self.set_busy)
         self.worker.finished.connect(self.worker_finished)
@@ -1352,6 +1400,24 @@ class ObserverWindow(QMainWindow):
             self.worker.submit('notification', action_id, False, str(exc))
         else:
             self.worker.submit('notification', action_id, True, None)
+
+    @Slot(str, str)
+    def show_session_completed(self, identifier, title):
+        if identifier in self.presented_completions:
+            return
+        self.presented_completions.add(identifier)
+        message = f'计时结束：{title}。会话已保存。'
+        self.show_notice(message)
+        self.health_banner_timer.stop()
+        self.alert_banner.setStyleSheet('color:#047857;background:#ecfdf5;padding:10px;')
+        self.alert_banner.setText(message)
+        self.alert_banner.show()
+        try:
+            play_completion_sound()
+        except Exception:
+            self.message.setText(message + ' 提示音播放失败，请检查声音设备。')
+        if self.tray.available:
+            self.tray.notify(message)
 
     @Slot(bool)
     def set_task_notifications(self, enabled):
@@ -1565,8 +1631,13 @@ class ObserverWindow(QMainWindow):
         self.preview_previous_width = None
 
     def update_focus_events(self, result, events, active=False):
+        session_id = result.get('id') if result else None
+        previous_session_id = (self.focus_event_signature[0]
+                               if self.focus_event_signature else None)
+        scroll_bar = self.focus_events.verticalScrollBar()
+        scroll_position = scroll_bar.value()
         signature = (
-            result.get('id') if result else None,
+            session_id,
             active,
             tuple((item['event_id'], item['rule_id'], item['offset'],
                    item['resolved_offset'], item['points'], item['delivery_state'],
@@ -1639,6 +1710,10 @@ class ObserverWindow(QMainWindow):
                 image = f'<span style="color:#94a3b8">{html.escape(item["image_status"])}</span>'
             lines.append(f'<p>{index}. {label}　{image}</p>')
         self.focus_events.setHtml(''.join(lines))
+        if session_id == previous_session_id:
+            # Evidence samples and live durations rebuild the document. Keep
+            # the user's reading position instead of QTextBrowser's default top.
+            scroll_bar.setValue(scroll_position)
         if not self.event_images:
             self.close_event_preview()
 
@@ -1658,6 +1733,8 @@ class ObserverWindow(QMainWindow):
         self.update_buttons()
 
     def update_buttons(self):
+        if hasattr(self, 'update_page'):
+            self.update_page.refresh()
         available = not self.blocked and not self.closing
         pending = self.pending_command
         if pending == 'start':
@@ -1854,6 +1931,7 @@ class ObserverWindow(QMainWindow):
         if self.closing:
             return
         self.closing = True
+        self.update_page.cancel_task()
         self.blocked = True
         self.tray_watch.stop()
         self.update_buttons()
@@ -1868,6 +1946,16 @@ class ObserverWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, event):
+        if self.update_page.busy():
+            if self.closing:
+                self.begin_exit()
+            elif self.tray.available:
+                self.hidden_to_tray = True
+                self.hide()
+            else:
+                self.begin_exit()
+            event.ignore()
+            return
         if self.worker.isRunning():
             if not self.closing and self.tray.available:
                 self.hidden_to_tray = True
@@ -1908,6 +1996,9 @@ def launch(args):
     finally:
         if power_filter is not None:
             app.removeNativeEventFilter(power_filter)
+        window.update_page.cancel_task()
+        if window.update_page.task is not None:
+            window.update_page.task.wait()
         # Also drain the owner if Qt's loop ends due to OS/session shutdown.
         window.worker.requestInterruption()
         window.worker.wait()

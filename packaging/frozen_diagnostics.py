@@ -33,12 +33,38 @@ def check_resources(load_native):
             result['native'] = {'cv2': cv2.__version__, 'numpy': np.__version__,
                                 'onnxruntime': onnxruntime.__version__, 'mediapipe': mediapipe.__version__,
                                 'synthetic_frame_inference': True, 'camera_opened': False}
+            from observer.product_cli import FROZEN_PHONE_VERIFIER_SHA
+            if FROZEN_PHONE_VERIFIER_SHA is not None:
+                from observer.phone_verifier import VerifiedPhoneBackend
+                from observer.observations import NormalizedBox
+                backend = prepared.probe._object
+                if not isinstance(backend, VerifiedPhoneBackend):
+                    raise RuntimeError('Pinned phone verifier was not connected')
+                decision = backend.verifier.reject(frame, NormalizedBox(.25, .25, .1, .2))
+                result['native']['phone_verifier'] = {
+                    'sha256': backend.verifier.sha256, 'connected': True,
+                    'synthetic_proposal_evaluated': isinstance(decision, bool)}
         finally:
             prepared.close()
     return result
 
 
 def desktop_smoke(root):
+    # Diagnostics may run beside a real user session. Exercise the same signal
+    # routes without sounding like the user's task ended or raising a toast.
+    from unittest.mock import patch
+    with patch('observer.desktop.play_reminder_sound') as alarm, \
+            patch('observer.desktop.play_completion_sound') as complete, \
+            patch('observer.desktop.DesktopTray.notify', return_value='合成通知已拦截'):
+        result = _desktop_smoke(root)
+        result['diagnostic_audio_suppressed'] = True
+        result['diagnostic_notifications_suppressed'] = True
+        result['completion_sound_requests'] = complete.call_count
+        result['alarm_sound_requests'] = alarm.call_count
+        return result
+
+
+def _desktop_smoke(root):
     from PySide6.QtWidgets import QApplication
     from observer.desktop import ObserverWindow, _reminder_wave
     from observer.desktop_ipc import SingleInstanceWake

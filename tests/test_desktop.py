@@ -20,6 +20,107 @@ from observer.product_cli import DemoSource
 
 @unittest.skipUnless(HAS_QT, 'desktop optional dependency not installed')
 class DesktopTests(unittest.TestCase):
+    def test_natural_deadline_plays_completion_once_and_persists_session(self):
+        self.open()
+        with patch('observer.desktop.play_completion_sound') as sound:
+            self.window.worker.submit('start', '完成提示测试', .01)
+            self.wait_for(lambda: bool(self.window.presented_completions), 8)
+            self.wait_for(lambda: self.window.state == 'idle')
+            sound.assert_called_once()
+            identifier = next(iter(self.window.presented_completions))
+            self.window.show_session_completed(identifier, '完成提示测试')
+            sound.assert_called_once()
+            self.assertIn('计时结束', self.window.alert_banner.text())
+        store = ProductStore(self.args.data_dir)
+        try:
+            self.assertEqual(store.history()[0]['state'], 'ended')
+        finally:
+            store.close()
+
+    def test_manual_end_does_not_play_completion(self):
+        self.open()
+        with patch('observer.desktop.play_completion_sound') as sound:
+            self.window.start.click()
+            self.wait_for(lambda: self.window.state == 'monitoring')
+            self.window.end.click()
+            self.wait_for(lambda: self.window.state == 'idle')
+            sound.assert_not_called()
+
+    def test_completion_sound_is_valid_three_note_wave(self):
+        import wave
+        from io import BytesIO
+        from observer.desktop import completion_wave
+        with wave.open(BytesIO(completion_wave())) as stream:
+            self.assertEqual(stream.getnchannels(), 1)
+            self.assertEqual(stream.getsampwidth(), 2)
+            self.assertAlmostEqual(stream.getnframes() / stream.getframerate(), .525, places=3)
+
+    def test_alarm_and_completion_waves_have_distinct_pitches(self):
+        import wave
+        from io import BytesIO
+        import numpy as np
+        from observer.desktop import completion_wave, _reminder_wave
+
+        def pitch(raw, start):
+            with wave.open(BytesIO(raw)) as stream:
+                rate = stream.getframerate()
+                samples = np.frombuffer(stream.readframes(stream.getnframes()), dtype='<i2')
+            chunk = samples[round(start*rate):round((start+.05)*rate)]
+            spectrum = np.abs(np.fft.rfft(chunk*np.hanning(len(chunk))))
+            return float(np.fft.rfftfreq(len(chunk), 1/rate)[np.argmax(spectrum)])
+
+        for start in (.035, .235):
+            self.assertAlmostEqual(pitch(_reminder_wave(False), start), 880, delta=12)
+        for start, expected in ((.035, 523), (.210, 659), (.385, 784)):
+            self.assertAlmostEqual(pitch(completion_wave(), start), expected, delta=12)
+
+    def test_version_update_page_is_minimal_and_checks_without_credentials(self):
+        from observer import __version__
+        from observer.updates import Release
+        from PySide6.QtWidgets import QPushButton, QLineEdit, QCheckBox, QTextBrowser
+        self.open()
+        page = self.window.update_page
+        self.assertIn(__version__, self.window.windowTitle())
+        self.assertEqual([button.text() for button in page.findChildren(QPushButton)],
+                         ['检查更新', 'GitHub 发布页'])
+        self.assertEqual(page.findChildren(QLineEdit), [])
+        self.assertEqual(page.findChildren(QCheckBox), [])
+        self.assertEqual(page.findChildren(QTextBrowser), [])
+        release = Release('v0.2.0', '<script>untrusted notes</script>', '', 1, 'a.zip', 100, '', None)
+        with patch('observer.update_page.GitHubUpdates') as client:
+            client.return_value.check.return_value = release
+            page.check.click()
+            self.wait_for(lambda: not page.busy() and page.check.isEnabled())
+            client.assert_called_once_with()
+            self.assertEqual(client.return_value.check.call_args.args[:2], (page.current, True))
+        self.assertIn('v0.2.0', page.status.text())
+        self.assertNotIn('script', page.status.text())
+        self.assertTrue(self.window.start.isEnabled())
+
+    def test_update_access_error_remains_retryable(self):
+        from observer.updates import UpdateError
+        self.open()
+        page = self.window.update_page
+        with patch('observer.update_page.GitHubUpdates.check', side_effect=UpdateError('无法访问 GitHub')):
+            page.check.click()
+            self.wait_for(lambda: not page.busy() and page.check.isEnabled())
+        self.assertIn('无法访问', page.status.text())
+
+    def test_update_check_has_no_upgrade_to_offer(self):
+        self.open()
+        page = self.window.update_page
+        with patch('observer.update_page.GitHubUpdates.check', return_value=None):
+            page.check.click()
+            self.wait_for(lambda: not page.busy() and page.check.isEnabled())
+        self.assertEqual(page.status.text(), '暂无更新。')
+
+    def test_update_release_button_opens_public_release_page(self):
+        from observer.updates import RELEASES_URL
+        self.open()
+        with patch('observer.update_page.QDesktopServices.openUrl') as open_url:
+            self.window.update_page.web.click()
+        self.assertEqual(open_url.call_args.args[0].toString(), RELEASES_URL)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
@@ -303,6 +404,39 @@ class DesktopTests(unittest.TestCase):
         self.window.close_event_preview()
         self.assertTrue(self.window.preview_panel.isHidden())
 
+    def test_event_refresh_preserves_scroll_during_evidence_and_duration_updates(self):
+        self.open()
+        self.window.worker.snapshot.disconnect(self.window.update_view)
+        result = {'id': 'session-scroll', 'title': '事件滚动检查'}
+        events = [{
+            'event_id': f'event-{i}', 'rule_id': 'focus_violation',
+            'offset': i * 20., 'resolved_offset': None,
+            'points': 0., 'delivery_state': 'delivered',
+            'image_path': None, 'image_status': '未保存图片',
+            'signals': ['phone_held'], 'violation_seconds': 12.,
+        } for i in range(60)]
+        self.window.update_focus_events(result, events, active=True)
+        self.app.processEvents()
+        scroll = self.window.focus_events.verticalScrollBar()
+        self.assertGreater(scroll.maximum(), 0)
+        for at_bottom in (False, True):
+            with self.subTest(at_bottom=at_bottom):
+                position = scroll.maximum() if at_bottom else scroll.maximum() // 2
+                scroll.setValue(position)
+                events[-1]['violation_seconds'] += 2.
+                events[-1]['images'] = [{'id': f'sample-{at_bottom}', 'sha256': 'abc'}]
+                self.window.update_focus_events(result, events, active=True)
+                self.app.processEvents()
+                self.assertEqual(scroll.value(), position)
+                events.append({**events[-1], 'event_id': f'new-{at_bottom}',
+                               'offset': 2000. + len(events)})
+                self.window.update_focus_events(result, events, active=True)
+                self.app.processEvents()
+                self.assertEqual(scroll.value(), position)
+        self.window.update_focus_events({**result, 'id': 'another-session'}, events, active=True)
+        self.app.processEvents()
+        self.assertEqual(scroll.value(), 0)
+
     def test_reminder_reports_delivery_success_or_failure_to_worker(self):
         self.open()
         with patch.object(self.window.worker, 'submit') as submit:
@@ -339,21 +473,60 @@ class DesktopTests(unittest.TestCase):
 
         winsound_stub = SimpleNamespace(
             SND_MEMORY=0x4, SND_NODEFAULT=0x2,
-            PlaySound=Mock(side_effect=RuntimeError('audio device unavailable')))
+            PlaySound=Mock(side_effect=RuntimeError('audio device unavailable')),
+            Beep=Mock())
         for rule_id, double in (('focus_violation', True), ('posture_deviation', False)):
+            winsound_stub.Beep.reset_mock()
             with self.subTest(rule_id=rule_id), \
                  patch('observer.desktop.os.name', 'nt'), \
                  patch.dict(sys.modules, {'winsound': winsound_stub}), \
                  patch('observer.desktop.QApplication.beep') as beep, \
-                 patch('observer.desktop.QTimer.singleShot') as delayed:
+                 patch('observer.desktop.QTimer.singleShot') as delayed, \
+                 patch('observer.desktop.time.sleep'):
                 play_reminder_sound(rule_id)
-                beep.assert_called_once_with()
-                if double:
-                    delayed.assert_called_once_with(200, beep)
-                    delayed.call_args.args[1]()
-                    self.assertEqual(beep.call_count, 2)
-                else:
-                    delayed.assert_not_called()
+                self.assertEqual(winsound_stub.Beep.call_args_list,
+                                 [unittest.mock.call(880, 120)]*2 if double
+                                 else [unittest.mock.call(660, 120)])
+                beep.assert_not_called()
+                delayed.assert_not_called()
+
+    def test_fallback_alarm_then_completion_has_distinct_pitches_and_no_deferred_beeps(self):
+        import sys
+        from observer.desktop import play_reminder_sound, play_completion_sound
+        native = SimpleNamespace(SND_MEMORY=4, SND_NODEFAULT=2,
+            PlaySound=Mock(side_effect=RuntimeError('WAV unavailable')), Beep=Mock())
+        with patch('observer.desktop.os.name', 'nt'), patch.dict(sys.modules, {'winsound': native}), \
+             patch('observer.desktop.time.sleep'), patch('observer.desktop.QTimer.singleShot') as delayed, \
+             patch('observer.desktop.QApplication.beep') as generic:
+            play_reminder_sound('phone_held')
+            play_completion_sound()
+        self.assertEqual(native.Beep.call_args_list, [unittest.mock.call(f, ms) for f, ms in
+            [(880, 120), (880, 120), (523, 140), (659, 140), (784, 140)]])
+        delayed.assert_not_called()
+        generic.assert_not_called()
+
+    def test_audio_failure_is_reported_instead_of_ambiguous_generic_beep(self):
+        import sys
+        from observer.desktop import play_completion_sound
+        native = SimpleNamespace(SND_MEMORY=4, SND_NODEFAULT=2,
+            PlaySound=Mock(side_effect=RuntimeError('WAV unavailable')),
+            Beep=Mock(side_effect=RuntimeError('no sound device')))
+        with patch('observer.desktop.os.name', 'nt'), patch.dict(sys.modules, {'winsound': native}), \
+             patch('observer.desktop.QApplication.beep') as generic:
+            with self.assertRaisesRegex(RuntimeError, 'no sound device'):
+                play_completion_sound()
+        generic.assert_not_called()
+
+    def test_completion_and_reminder_use_separate_sound_routes(self):
+        self.open()
+        with patch('observer.desktop.play_reminder_sound') as alarm, \
+             patch('observer.desktop.play_completion_sound') as complete:
+            self.window.show_reminder('routing-alert', 'phone_held', '提醒：可见手机')
+            alarm.assert_called_once_with('phone_held')
+            complete.assert_not_called()
+            self.window.show_session_completed('routing-session', '完成')
+            alarm.assert_called_once_with('phone_held')
+            complete.assert_called_once_with()
 
     def test_windows_violation_has_two_tones_and_posture_has_one(self):
         import sys
@@ -619,7 +792,7 @@ class DesktopTests(unittest.TestCase):
         self.open()
         self.assertEqual(
             [self.window.tabs.tabText(index) for index in range(self.window.tabs.count())],
-            ['专注', '历史', '高级计划'])
+            ['专注', '历史', '高级计划', '版本与更新'])
         self.window.tabs.setCurrentIndex(2)
         self.assertTrue(self.window.advanced_tabs.isVisible())
         self.window.plan_title.setText('晨间专注')

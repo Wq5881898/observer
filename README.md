@@ -70,3 +70,12 @@ uv sync --python 3.11 --extra yolo
 `camera-smoke` 和 `vision-smoke` 都不显示预览、不保存图像或视频，只输出取帧、模型延迟和进程资源统计。模型二进制来自 Google MediaPipe 官方存储，来源和 SHA-256 记录在 `models/manifest.json`；二进制本身不提交到版本库。
 
 `calibrate` 会打开临时本地窗口，引导完成中立姿势和 9 点注意力校准。校准档案、派生数值和真实验证批次都写入 Git 已忽略的 `data/`；不保存连续视频或完整 landmarks。验证默认只为误判保存一张本地关键帧，并写入 7 天到期索引；可用 `validate-live --no-error-evidence` 完全关闭。完整命令和数据交接见 [阶段 C 运行手册](docs/phase-c-runbook.md)。
+
+
+## 公开源码与更新页面
+
+Observer 自有源码采用 AGPL-3.0-only，条款见 LICENSE；第三方组件保留各自许可，见 NOTICE 与 packaging/REDISTRIBUTION.md。
+
+更新页仅保留当前版本、检查更新、GitHub 发布页和简短状态，无需访问令牌。发布页提供可下载的 Windows 版本；本地开发版本可能领先于已发布版本。
+
+本仓库不包含个人照片、录像、数据库、个人校准和训练数据。第三方对应源码及模型交付范围仍按 packaging/SOURCE-DELIVERY.txt 说明核对，仓库公开不代表旧二进制的材料审核已完成。

@@ -1,0 +1,23 @@
+Observer source-delivery preparation
+
+Observer-authored source is AGPL-3.0-only; see LICENSE and NOTICE.
+This internal candidate is not cleared for public distribution.
+
+Before distributing a binary, supply the corresponding application source,
+configuration and build scripts for that exact build, and satisfy the applicable
+third-party source and notice requirements. Identify the source revision and
+match build-info.json input hashes; a private repository inaccessible to the
+recipient is not a source-delivery mechanism.
+
+The current local f008 review snapshot contains 47 original text inputs verified
+against its build-info hashes, plus a separately identified README. It excludes
+model binaries and personal data and is NOT a complete corresponding-source
+delivery. Model preferred-form scope and third-party source mapping remain open.
+
+The release must establish an accessible source-delivery location or accompany
+the binary with the required source materials. No public source endpoint or
+written source offer is claimed by this preparation file.
+
+Qt libraries remain subject to their applicable LGPL/GPL terms. Preserve the
+recipient's rights to modify libraries and run/relink modified versions. Bundled
+license texts alone do not establish source availability or full compliance.

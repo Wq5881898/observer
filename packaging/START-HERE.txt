@@ -1,7 +1,7 @@
 Observer 0.1.0 — F 内部候选（未正式发布）
 
 保留整个文件夹。双击 Observer.exe 打开桌面窗口。
-真实摄像头补验目前暂缓；内部测试请使用模拟启动命令：
+为隔离个人历史，内部点验先使用模拟启动命令：
 Observer.exe product --data-dir "C:\你的隔离目录" gui --demo
 
 默认数据：%LOCALAPPDATA%\Observer\product
@@ -16,4 +16,6 @@ Observer.exe product --data-dir "C:\你的隔离目录" gui --demo
 替换/回退：先完全退出全部实例，再换整个程序文件夹，保留用户数据目录。
 首轮仅在合成数据上验证；这不保证未来数据库版本可向下兼容。
 本候选无需管理员权限，没有安装器、启动项或自动更新。
-E 的设备恢复/60 分钟补验、打包人工点验和许可审查未完成，不供公开分发。
+E 已通过并关闭；打包人工点验、独立环境和许可材料仍未完成。
+项目源码采用 AGPL-3.0-only；见 LICENSE、NOTICE、SOURCE-DELIVERY.txt。
+当前候选不供公开分发；这份说明不构成 F 验收或许可签收。

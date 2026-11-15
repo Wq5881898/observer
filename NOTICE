@@ -1,0 +1,18 @@
+Observer
+
+Observer-authored source code is licensed under the GNU Affero General Public
+License, version 3 only (AGPL-3.0-only). See LICENSE for the complete terms.
+Authorship and changes are recorded in the source version history.
+
+Third-party software and model components retain their respective licenses and
+copyright notices. The application license does not replace those terms.
+The frozen phone model originates from Ultralytics YOLO11n fine-tuning; its
+metadata identifies AGPL-3.0. Qt components include LGPL/GPL-licensed libraries
+and the GPLv3 Qt Virtual Keyboard module. See packaging/REDISTRIBUTION.md.
+
+This repository's release preparation does not establish that the existing
+f008 binary contains all required notices or corresponding source materials.
+The distribution review remains open. Personal images, recordings, calibration,
+databases and training datasets are not included in this source delivery.
+Their omission is not a determination that every model-source obligation has
+been satisfied; that scope must be resolved before distribution.

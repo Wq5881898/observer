@@ -65,7 +65,11 @@ class DesktopIpcTests(unittest.TestCase):
             "assert s.waitForConnected(800)\n"
             "s.write(bytes.fromhex(sys.argv[2]))\n"
             "s.flush()\n"
-            "if s.bytesToWrite(): assert s.waitForBytesWritten(800)\n"
+            # A rejected oversized request may close the peer before its full
+            # payload drains. The rejection/response assertions below still
+            # verify server behavior; a clean peer close isn't a send failure.
+            "if s.bytesToWrite() and not s.waitForBytesWritten(800):\n"
+            "    assert s.state()==QLocalSocket.LocalSocketState.UnconnectedState or s.error()==QLocalSocket.LocalSocketError.PeerClosedError\n"
             "started=time.monotonic()\n"
             "response=b''\n"
             "deadline=started+2.5\n"

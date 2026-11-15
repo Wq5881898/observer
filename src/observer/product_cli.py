@@ -34,6 +34,8 @@ FROZEN_PHONE_SCORE_THRESHOLD = .25
 FROZEN_PHONE_RETAIN_SECONDS = 1.5
 FROZEN_PHONE_CENTER_DISTANCE = .18
 FROZEN_PHONE_CONFIRMATION_HITS = 2
+# Enabled only by a build that also pins and delivers the trained verifier.
+FROZEN_PHONE_VERIFIER_SHA: str | None = None
 DEFAULT_PROFILE = Path('data/calibration/default.json')
 STALE_FRAME_SECONDS = 5.0
 FRESH_FRAME_SECONDS = .75
@@ -287,6 +289,10 @@ def prepare_camera_resources(models_dir: Path, profile_path: Path | None,
         single_class_name='cell_phone')
     yolo_ready_at = time.monotonic()
     try:
+        if FROZEN_PHONE_VERIFIER_SHA is not None:
+            from observer.phone_verifier import PhoneProposalVerifier, VerifiedPhoneBackend
+            backend = VerifiedPhoneBackend(backend, PhoneProposalVerifier(
+                models_dir / 'yolo' / 'phone-proposal-verifier.xml', FROZEN_PHONE_VERIFIER_SHA))
         probe = MediapipeVisionProbe(
             models, config.inference, profile,
             phone_score_threshold=FROZEN_PHONE_SCORE_THRESHOLD,
@@ -507,6 +513,7 @@ class CameraSource:
             ready_at = time.monotonic()
             self.identity = {'source': 'camera', 'phone_model': str(model_path.resolve()),
                              'phone_sha256': FROZEN_SHA, 'person': 'EfficientDet low-frequency',
+                             'phone_verifier_sha256': FROZEN_PHONE_VERIFIER_SHA,
                              'phone_tracking': {
                                  'score_threshold': FROZEN_PHONE_SCORE_THRESHOLD,
                                  'retain_seconds': FROZEN_PHONE_RETAIN_SECONDS,
