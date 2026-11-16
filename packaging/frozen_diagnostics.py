@@ -121,7 +121,10 @@ def _desktop_smoke(root):
         window.pause.click()
         wait(lambda: window.state == 'monitoring')
         window.end.click()
-        wait(lambda: window.state == 'idle' and window.history.count() >= 1)
+        wait(lambda: window.state == 'idle' and any(
+            row['id'] not in previous and row['title'] == 'F 合成会话'
+            and row['state'] == 'ended'
+            for row in (window.history_payload or {}).get('rows', [])))
         app.processEvents()
         screenshot = root/'synthetic-desktop.png'
         if not window.grab().save(str(screenshot)):
@@ -202,7 +205,10 @@ def _desktop_smoke(root):
             store.close()
         window.hide()
         wait(lambda: len(submitted) == 1)
-        wait(lambda: window.state == 'idle' and window.history.count() >= 1)
+        wait(lambda: window.state == 'idle' and any(
+            row['id'] not in previous and row['title'] == 'F 定时合成任务'
+            and row['state'] == 'ended'
+            for row in (window.history_payload or {}).get('rows', [])))
         window.task_notifications.setChecked(False)
         close_window()
         lock = RuntimeLock(root)

@@ -121,6 +121,63 @@ class DesktopTests(unittest.TestCase):
             self.window.update_page.web.click()
         self.assertEqual(open_url.call_args.args[0].toString(), RELEASES_URL)
 
+    def test_update_download_click_switches_only_after_worker_stops(self):
+        from observer.updates import Release
+        self.open(); page = self.window.update_page
+        release = Release('v0.2.0', '', '', 1, 'a.zip', 100, '', None)
+        downloaded = Path(self.temp.name)/'new-app'
+        def completed(app, args):
+            self.assertFalse(self.window.worker.isRunning())
+            self.assertTrue(self.window.exit_completed)
+        with patch('observer.update_page.GitHubUpdates.check', return_value=release), \
+                patch('observer.update_page.GitHubUpdates.stage', return_value=downloaded) as stage, \
+                patch('observer.update_page.is_frozen', return_value=True), \
+                patch('observer.update_page.finish_upgrade', side_effect=completed) as finish:
+            page.check.click(); self.wait_for(lambda: not page.busy())
+            self.assertEqual(page.check.text(), '下载并更新')
+            page.check.click(); self.wait_for(lambda: self.window.exit_completed, 10)
+            stage.assert_called_once(); finish.assert_called_once_with(downloaded, self.args)
+
+    def test_update_waits_for_current_session_and_switches_after_end(self):
+        from observer.updates import Release
+        self.open(); page = self.window.update_page
+        self.window.start.click(); self.wait_for(lambda:self.window.state == 'monitoring')
+        page.release = Release('v0.2.0', '', '', 1, 'a.zip', 100, '', None); page.refresh()
+        with patch('observer.update_page.GitHubUpdates.stage', return_value=Path(self.temp.name)/'new'), \
+                patch('observer.update_page.is_frozen', return_value=True), \
+                patch('observer.update_page.finish_upgrade') as finish:
+            page.check.click(); self.wait_for(lambda: not page.busy())
+            finish.assert_not_called(); self.assertFalse(self.window.closing)
+            self.assertIn('计时结束', page.status.text())
+            self.window.end.click(); self.wait_for(lambda: self.window.exit_completed, 10)
+            finish.assert_called_once()
+
+    def test_update_pending_switch_can_be_cancelled_without_losing_download(self):
+        from observer.updates import Release
+        self.open(); page = self.window.update_page
+        self.window.start.click(); self.wait_for(lambda:self.window.state == 'monitoring')
+        page.release = Release('v0.2.0', '', '', 1, 'a.zip', 100, '', None); page.refresh()
+        with patch('observer.update_page.GitHubUpdates.stage', return_value=Path(self.temp.name)/'new'), \
+                patch('observer.update_page.is_frozen', return_value=True), \
+                patch('observer.update_page.finish_upgrade') as finish:
+            page.check.click(); self.wait_for(lambda: not page.busy())
+            page.check.click(); self.assertFalse(page.auto_switch)
+            self.assertIsNotNone(page.staged_app)
+            self.window.end.click(); self.wait_for(lambda:self.window.state == 'idle')
+            finish.assert_not_called(); self.assertFalse(self.window.closing)
+            self.assertEqual(page.check.text(), '重启更新')
+
+    def test_download_failure_keeps_session_open_and_download_retryable(self):
+        from observer.updates import Release, UpdateError
+        self.open(); page = self.window.update_page
+        page.release = Release('v0.2.0', '', '', 1, 'a.zip', 100, '', None); page.refresh()
+        with patch('observer.update_page.GitHubUpdates.stage', side_effect=UpdateError('校验失败')), \
+                patch('observer.update_page.finish_upgrade') as finish:
+            page.check.click(); self.wait_for(lambda: not page.busy())
+            self.assertIn('校验失败',page.status.text())
+            self.assertEqual(page.check.text(), '下载并更新')
+            self.assertFalse(self.window.closing); finish.assert_not_called()
+
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
