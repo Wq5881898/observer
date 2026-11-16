@@ -337,7 +337,7 @@ wheels = [
 
 [[package]]
 name = "observer-focus"
-version = "0.1.0rc13"
+version = "0.1.0rc14"
 source = { editable = "." }
 dependencies = [
     { name = "mediapipe" },
