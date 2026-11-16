@@ -1,0 +1,1 @@
+Proposal verifier: existing RBF SVM/HOG recipe unchanged; 160 phone crops, 115 non-phone crops. This revision adds only three owner-confirmed eyeglass proposals. Dataset photographs and per-image feature files are private and not included. XML is the editable trained model. Prior YOLO checkpoint and training tools remain in the repository.

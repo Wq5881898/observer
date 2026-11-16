@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "observer-focus"
-version = "0.1.0rc12"
+version = "0.1.0rc13"
 description = "Local-first focus, posture, and phone-use observer"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
