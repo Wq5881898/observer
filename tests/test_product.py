@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from observer.observations import Observation, SignalValue
 from observer.product import (
-    NAMES, ProductStore, RuntimeLock, SessionService, product_rule_configs,
+    NAMES, SCHEMA_VERSION, ProductStore, RuntimeLock, SessionService, product_rule_configs,
     unified_posture_signal,
 )
 
@@ -611,10 +611,10 @@ class ProductTests(unittest.TestCase):
         self.store = ProductStore(self.root)
         self.service = SessionService(self.store)
         self.assertEqual(self.store.summary(identifier)['state'], 'ended')
-        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
         migrations = self.store.db.execute(
             'SELECT version FROM schema_migrations ORDER BY version').fetchall()
-        self.assertEqual([row[0] for row in migrations], [1, 2, 3, 4, 5, 6, 7, 8, 9])
+        self.assertEqual([row[0] for row in migrations], list(range(1, SCHEMA_VERSION+1)))
         self.assertIn('error', {row[1] for row in self.store.db.execute('PRAGMA table_info(tasks)')})
         self.assertIn('error', {row[1] for row in self.store.db.execute('PRAGMA table_info(sessions)')})
         backup = sqlite3.connect(self.root / 'observer.sqlite3.v1.backup')
@@ -674,7 +674,7 @@ class ProductTests(unittest.TestCase):
         self.service = SessionService(self.store)
         task = next(task for task in self.store.tasks() if task['id'] == identifier)
         self.assertIsNone(task['error'])
-        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
         backup = sqlite3.connect(self.root / 'observer.sqlite3.v2.backup')
         try:
             self.assertEqual(backup.execute('PRAGMA user_version').fetchone()[0], 2)
@@ -701,7 +701,7 @@ class ProductTests(unittest.TestCase):
         self.store = ProductStore(self.root)
         self.service = SessionService(self.store)
         self.assertIsNone(self.store.summary(identifier)['error'])
-        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
         backup = sqlite3.connect(self.root / 'observer.sqlite3.v3.backup')
         try:
             self.assertEqual(backup.execute('PRAGMA user_version').fetchone()[0], 3)
@@ -734,7 +734,7 @@ class ProductTests(unittest.TestCase):
         alert = next(action for action in self.store.summary(identifier)['actions']
                      if action['id'] == 'legacy-alert')
         self.assertEqual(alert['delivery_state'], 'unknown')
-        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
 
     def test_v5_database_adds_empty_resource_summary_and_preserves_history(self):
         identifier = self.start()
@@ -751,7 +751,7 @@ class ProductTests(unittest.TestCase):
         self.store = ProductStore(self.root)
         self.service = SessionService(self.store)
         self.assertIsNone(self.store.summary(identifier)['resource_summary'])
-        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
         backup = sqlite3.connect(self.root / 'observer.sqlite3.v5.backup')
         try:
             columns = {row[1] for row in backup.execute('PRAGMA table_info(sessions)')}
@@ -779,7 +779,7 @@ class ProductTests(unittest.TestCase):
         self.assertIsNone(task['plan_id'])
         self.assertEqual(self.store.summary(session_id)['state'], 'ended')
         self.assertEqual(self.store.plans(), [])
-        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
         backup = sqlite3.connect(self.root / 'observer.sqlite3.v6.backup')
         try:
             tables = {row[0] for row in backup.execute(
@@ -808,7 +808,7 @@ class ProductTests(unittest.TestCase):
         result = self.store.summary(session_id)
         self.assertEqual(result['score_version'], 'points_v1')
         self.assertEqual(result['focus_incidents'], [])
-        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
         backup = sqlite3.connect(self.root / 'observer.sqlite3.v7.backup')
         try:
             columns = {row[1] for row in backup.execute('PRAGMA table_info(sessions)')}
@@ -1059,7 +1059,7 @@ class ProductTests(unittest.TestCase):
         damaged.execute(
             'CREATE TABLE evidence(id TEXT PRIMARY KEY, session_id TEXT, event_id TEXT NOT NULL, '
             'rule_id TEXT, kind TEXT NOT NULL, offset REAL, signals TEXT NOT NULL, '
-            'path TEXT NOT NULL, sha256 TEXT, error TEXT)'
+            'path TEXT NOT NULL, sha256 TEXT, error TEXT, expired_at TEXT)'
         )
         damaged.commit()
         damaged.close()
@@ -1266,16 +1266,18 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(self.store.data_status()['images'], 1)
         self.assertEqual(self.store.data_status()['evidence_errors'], 2)
 
-    def test_retention_only_deletes_ended_expired_product_sessions(self):
+    def test_retention_keeps_expired_and_active_session_logs(self):
         self.start()
         self.service.end(0, self.now)
         self.start()
-        self.assertEqual(self.store.purge(self.now+timedelta(days=31)), 1)
-        self.assertEqual(len(self.store.history()), 1)
+        self.assertEqual(self.store.purge(self.now+timedelta(days=31)), 0)
+        self.assertEqual(len(self.store.history()), 2)
 
     def test_retention_isolates_unsafe_evidence_and_continues_cleanup(self):
         import numpy as np
+        self.store.set_images(True)
         safe = self.start()
+        self.store.capture(safe, 'safe-retention', np.zeros((16, 16, 3), dtype=np.uint8))
         self.service.end(1, self.now + timedelta(seconds=1))
         unsafe = self.start()
         self.store.set_images(True)
@@ -1291,8 +1293,7 @@ class ProductTests(unittest.TestCase):
             )
 
         self.assertEqual(self.store.purge(self.now + timedelta(days=31)), 1)
-        self.assertEqual([row['id'] for row in self.store.history()], [unsafe])
-        self.assertNotIn(safe, {row['id'] for row in self.store.history()})
+        self.assertEqual({row['id'] for row in self.store.history()}, {unsafe, safe})
         self.assertEqual(self.store.data_status()['evidence_errors'], 1)
         self.assertEqual(outside.read_bytes(), b'keep')
 
@@ -1626,7 +1627,7 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(item['kind'], 'legacy')
         self.assertEqual(item['signals'], '[]')
         self.assertFalse(self.store.setting('test_evidence'))
-        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(self.store.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
 
     def test_opt_in_evidence_captures_soft_event_once(self):
         import numpy as np

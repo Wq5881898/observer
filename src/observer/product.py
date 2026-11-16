@@ -20,7 +20,7 @@ from observer.scoring import RuleEngine
 
 HARD_SIGNALS = ("away", "phone_held")
 SCORE_VERSION = "time_ratio_v2"
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 REQUIRED_SCHEMA = {
     'plans': {'id', 'title', 'local_time', 'timezone', 'recurrence', 'weekdays',
               'minutes', 'break_every_minutes', 'break_minutes', 'allow_offscreen',
@@ -35,10 +35,11 @@ REQUIRED_SCHEMA = {
     'actions': {'id', 'session_id', 'event_id', 'rule_id', 'kind', 'offset', 'points', 'reason',
                 'delivery_state', 'delivery_attempted', 'delivery_error'},
     'evidence': {'id', 'session_id', 'event_id', 'rule_id', 'kind', 'offset',
-                 'signals', 'path', 'sha256', 'error'},
+                 'signals', 'path', 'sha256', 'error', 'expired_at'},
     'focus_incidents': {'id', 'session_id', 'started', 'ended', 'signals', 'segments',
                         'violation_seconds', 'alert_offset'},
     'settings': {'key', 'value'},
+    'session_work': {'session_id', 'sequence', 'started', 'ended', 'seconds'},
     'schema_migrations': {'version', 'applied', 'description'},
 }
 REQUIRED_FOREIGN_KEYS = {
@@ -48,6 +49,7 @@ REQUIRED_FOREIGN_KEYS = {
     'actions': {('session_id', 'sessions', 'id', 'CASCADE')},
     'evidence': {('session_id', 'sessions', 'id', 'CASCADE')},
     'focus_incidents': {('session_id', 'sessions', 'id', 'CASCADE')},
+    'session_work': {('session_id', 'sessions', 'id', 'CASCADE')},
 }
 NAMES = {"away": "离席", "phone_held": "可见手机", "attention_away": "离开屏幕",
          FOCUS_RULE_ID: "专注违规",
@@ -283,6 +285,8 @@ class ProductStore:
                         self._migrate_v7_to_v8()
                     elif version == 8:
                         self._migrate_v8_to_v9()
+                    elif version == 9:
+                        self._migrate_v9_to_v10()
                     version = self.db.execute("PRAGMA user_version").fetchone()[0]
                     if version != previous + 1:
                         raise RuntimeError(
@@ -442,6 +446,15 @@ class ProductStore:
                         or not isinstance(signals, list)
                         or any(signal not in FOCUS_SIGNALS for signal in signals)):
                     raise ValueError("事件图片元数据无效")
+            for row in self.db.execute('SELECT sequence,started,ended,seconds FROM session_work'):
+                a, b = datetime.fromisoformat(row['started']), datetime.fromisoformat(row['ended'])
+                utc_text(a)
+                utc_text(b)
+                if (type(row['sequence']) is not int or row['sequence'] < 0
+                        or not math.isfinite(row['seconds']) or row['seconds'] < 0
+                        or not math.isclose((b-a).total_seconds(), row['seconds'],
+                                            rel_tol=1e-9, abs_tol=2e-6)):
+                    raise ValueError('历史计时时段无效')
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise ValueError(f"数据库计划数据损坏：{exc}") from exc
 
@@ -488,14 +501,23 @@ class ProductStore:
                     session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
                     event_id TEXT NOT NULL, rule_id TEXT, kind TEXT NOT NULL,
                     offset REAL, signals TEXT NOT NULL,
-                    path TEXT NOT NULL, sha256 TEXT, error TEXT);
+                    path TEXT NOT NULL, sha256 TEXT, error TEXT, expired_at TEXT);
                 CREATE INDEX evidence_event ON evidence(session_id,event_id,offset,id);
+                CREATE INDEX evidence_unexpired_session ON evidence(session_id)
+                    WHERE expired_at IS NULL;
                 CREATE TABLE focus_incidents(id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                     started REAL NOT NULL, ended REAL, signals TEXT NOT NULL,
                     segments TEXT NOT NULL, violation_seconds REAL NOT NULL,
                     alert_offset REAL);
                 CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE session_work(
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    sequence INTEGER NOT NULL,
+                    started TEXT NOT NULL, ended TEXT NOT NULL, seconds REAL NOT NULL,
+                    PRIMARY KEY(session_id,sequence));
+                CREATE INDEX session_work_dates ON session_work(ended,started);
+                CREATE INDEX sessions_history_started ON sessions(started);
                 CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,
                     applied TEXT NOT NULL, description TEXT NOT NULL);
                 INSERT INTO settings VALUES('images','false'),
@@ -511,7 +533,8 @@ class ProductStore:
                  (6, applied, 'persist bounded session resource summary'),
                  (7, applied, 'add recurring plan templates and occurrence links'),
                  (8, applied, 'merge focus incidents and version time-ratio scoring'),
-                 (9, applied, 'store ordered multi-frame test evidence')),
+                 (9, applied, 'store ordered multi-frame test evidence'),
+                 (10, applied, 'persist work intervals; retain logs independently of screenshots')),
             )
             self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             self.db.commit()
@@ -691,6 +714,33 @@ class ProductStore:
             self.db.execute("INSERT OR REPLACE INTO schema_migrations VALUES(?,?,?)",
                             (9, applied, 'store ordered multi-frame test evidence'))
             self.db.execute("PRAGMA user_version=9")
+            self.db.commit()
+        except sqlite3.Error:
+            self.db.rollback()
+            raise
+
+    def _migrate_v9_to_v10(self):
+        # Old totals remain intact. No invented pause times or daily splits.
+        try:
+            self.db.execute('BEGIN IMMEDIATE')
+            self.db.execute(
+                'CREATE TABLE IF NOT EXISTS session_work('
+                'session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, '
+                'sequence INTEGER NOT NULL, '
+                'started TEXT NOT NULL, ended TEXT NOT NULL, seconds REAL NOT NULL, '
+                'PRIMARY KEY(session_id,sequence))')
+            self.db.execute('CREATE INDEX IF NOT EXISTS session_work_dates '
+                            'ON session_work(ended,started)')
+            self.db.execute('CREATE INDEX IF NOT EXISTS sessions_history_started ON sessions(started)')
+            columns = {row[1] for row in self.db.execute('PRAGMA table_info(evidence)')}
+            if 'expired_at' not in columns:
+                self.db.execute('ALTER TABLE evidence ADD COLUMN expired_at TEXT')
+            self.db.execute('CREATE INDEX IF NOT EXISTS evidence_unexpired_session '
+                            'ON evidence(session_id) WHERE expired_at IS NULL')
+            self.db.execute('INSERT OR REPLACE INTO schema_migrations VALUES(?,?,?)',
+                            (10, utc_text(utc_now()),
+                             'persist work intervals; retain logs independently of screenshots'))
+            self.db.execute('PRAGMA user_version=10')
             self.db.commit()
         except sqlite3.Error:
             self.db.rollback()
@@ -917,15 +967,24 @@ class ProductStore:
                 (f"程序启动时已超过{grace_seconds:g}秒补启动窗口", cutoff),
             ).rowcount
 
-    def history(self):
+    def history(self, limit=None):
         rows = []
-        for row in self.db.execute(
+        query = (
                 "SELECT id,title,started,ended,state,minutes,identity "
-                "FROM sessions ORDER BY started DESC LIMIT 100"):
+                "FROM sessions ORDER BY started DESC")
+        parameters = ()
+        if limit is not None:
+            query += ' LIMIT ?'
+            parameters = (limit,)
+        for row in self.db.execute(query, parameters):
             item = dict(row)
             item['mode'] = _session_mode(row['identity'])
             rows.append(item)
         return rows
+
+    def history_calendar(self, now, timezone_name):
+        from observer.history import calendar_history
+        return calendar_history(self.db, now, timezone_name)
 
     def today_summary(self, now: datetime, timezone_name: str) -> dict:
         utc_text(now)
@@ -1084,7 +1143,7 @@ class ProductStore:
         tasks = self.db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         plans = self.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
         image_count = image_bytes = evidence_errors = 0
-        for row in self.db.execute("SELECT path,sha256,error FROM evidence"):
+        for row in self.db.execute("SELECT path,sha256,error FROM evidence WHERE expired_at IS NULL"):
             if row['error'] or not row['path'] or not row['sha256']:
                 evidence_errors += 1
                 continue
@@ -1111,7 +1170,7 @@ class ProductStore:
     def recover_evidence(self):
         """Reconcile crash leftovers after the caller has acquired RuntimeLock."""
         recovered = failed = 0
-        rows = list(self.db.execute("SELECT id,path,sha256,error FROM evidence"))
+        rows = list(self.db.execute("SELECT id,path,sha256,error FROM evidence WHERE expired_at IS NULL"))
         for row in rows:
             try:
                 if not row['path']:
@@ -1235,22 +1294,30 @@ class ProductStore:
         return target
 
     def purge(self, now: datetime):
+        """Expire screenshots only. Sessions and text logs are retained."""
         cutoff = utc_text(now - timedelta(days=self.setting('retention_days')))
-        ids = [r[0] for r in self.db.execute(
-            "SELECT id FROM sessions WHERE ended < ? "
-            "AND state NOT IN ('monitoring','paused','resting')", (cutoff,))]
+        rows = list(self.db.execute(
+            "SELECT e.id,e.path FROM evidence e JOIN sessions s ON s.id=e.session_id "
+            "WHERE e.expired_at IS NULL AND "
+            "CASE WHEN e.offset IS NOT NULL THEN julianday(s.started)+e.offset/86400.0 "
+            "ELSE julianday(COALESCE(s.ended,s.updated)) END < julianday(?)", (cutoff,)))
         removed = 0
-        for identifier in ids:
+        for row in rows:
             try:
-                self.delete_session(identifier)
+                if row['path']:
+                    self.safe_image_path(row['path']).unlink(missing_ok=True)
+                    self.safe_image_path(row['path'] + '.tmp').unlink(missing_ok=True)
             except (OSError, ValueError) as exc:
                 detail = f"清理失败：{str(exc).strip()[:450] or type(exc).__name__}"
                 with self.db:
                     self.db.execute(
-                        "UPDATE evidence SET error=? WHERE session_id=?",
-                        (detail, identifier),
+                        "UPDATE evidence SET error=COALESCE(error,?) WHERE id=?",
+                        (detail, row['id']),
                     )
             else:
+                with self.db:
+                    self.db.execute("UPDATE evidence SET path='',expired_at=? WHERE id=?",
+                                    (utc_text(now), row['id']))
                 removed += 1
         return removed
 
@@ -1392,6 +1459,8 @@ class SessionService:
                  json.dumps([asdict(r) for r in self.rules]), None,
                  break_every_minutes, break_minutes, int(allow_offscreen), 0, 0,
                  SCORE_VERSION))
+            self.store.db.execute('INSERT INTO session_work VALUES(?,0,?,?,0)',
+                                  (identifier, utc_text(now), utc_text(now)))
         self.identifier, self.state = identifier, 'monitoring'
         self.started = self.last_at = self.flushed_at = at
         self.deadline = at + minutes * 60
@@ -1412,7 +1481,15 @@ class SessionService:
             identity, [asdict(rule) for rule in self.rules], allow_offscreen, SCORE_VERSION
         )
         self.focus = FocusIncidentTracker(self.rules, at, scoring_signals)
+        self.work_sequence = -1
+        self._start_work_interval(at, now)
         return identifier
+
+    def _start_work_interval(self, at, now):
+        self.work_sequence += 1
+        self.work_started_at = at
+        self.work_started_utc = now
+        self.work_interval_seconds = 0.
 
     def _account(self, at: float, current: Observation | None = None):
         delta = at - self.last_at
@@ -1420,6 +1497,7 @@ class SessionService:
             raise ValueError("时间不能倒退或无效")
         if self.state == 'monitoring':
             self.work_seconds += delta
+            self.work_interval_seconds = at - self.work_started_at
             for name, values in self.totals.items():
                 previous = self.last.signal(name).state if self.last else SignalState.UNKNOWN
                 following = current.signal(name).state if current else SignalState.UNKNOWN
@@ -1442,6 +1520,13 @@ class SessionService:
                 self.store.db.execute(
                     "UPDATE sessions SET updated=?,state=?,break_seconds=? WHERE id=?",
                     (utc_text(now), self.state, self.break_seconds, self.identifier))
+                self.store.db.execute(
+                    'INSERT INTO session_work VALUES(?,?,?,?,?) '
+                    'ON CONFLICT(session_id,sequence) DO UPDATE SET '
+                    'ended=excluded.ended,seconds=excluded.seconds',
+                    (self.identifier, self.work_sequence, utc_text(self.work_started_utc),
+                     utc_text(self.work_started_utc + timedelta(seconds=self.work_interval_seconds)),
+                     self.work_interval_seconds))
                 for name, values in self.totals.items():
                     self.store.db.execute("INSERT OR REPLACE INTO totals VALUES(?,?,?,?,?)",
                                           (self.identifier, name, *values))
@@ -1535,6 +1620,7 @@ class SessionService:
         self.deadline = at + self.paused_remaining
         self.paused_remaining = None
         self.state, self.last = 'monitoring', None
+        self._start_work_interval(at, now)
         self._flush(now)
 
     def remaining_seconds(self, at: float) -> float:
@@ -1564,6 +1650,7 @@ class SessionService:
         self.state, self.last = 'monitoring', None
         self.break_deadline = None
         self.next_break_work += self.break_every_seconds
+        self._start_work_interval(at, now)
         self._flush(now)
 
     def extend(self, minutes: float, now: datetime):

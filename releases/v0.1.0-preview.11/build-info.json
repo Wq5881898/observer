@@ -1,0 +1,245 @@
+{
+  "build_id": "phone-ra-event4-20261116",
+  "version": "0.1.0-preview.11",
+  "created_utc": "2026-11-16T20:28:09.767963+00:00",
+  "python": "3.11.15 (main, Jul 18 2026, 17:06:27) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "git_head": "991b22d41dc36b47f00e0297d277c6725baa05df",
+  "git_worktree_dirty": true,
+  "source_tree_sha256": "72dbfb8da60880839936ac9f44bf17a98ffff23504c6ea11e6731df8dbfb6b34",
+  "source_files": {
+    "src/observer/__init__.py": "6761650299fb7028cd6a3756b79ba6f683bba5e040290b11c643c7e1d1686d57",
+    "src/observer/__main__.py": "64cd0e92348cafeec92c1cccdc84a8b8f2bcf095620bbbbad1f087c919654d24",
+    "src/observer/alignment.py": "2130e218abe316789695a254d0381a02fdd34a395b1a8f955c90a66bfc3e1e0c",
+    "src/observer/calibration.py": "7885366e2b2875ab628d0a94756d6d6588cfd36923377ad2765bc7c1013125b2",
+    "src/observer/calibration_workflow.py": "6bd3292d700c63cbc26b135645b8c6394f119e397f1db6c3a0f89feab21cabca",
+    "src/observer/camera.py": "db7021b254b724f1057adc603763420d016df51d0feedb13b0a2ed10b5e22faa",
+    "src/observer/cli.py": "9c3dc322acb34b6d47b06b90879b95816f1a5cf7e8d8b28656c2a2a2ee7fb957",
+    "src/observer/config.py": "36c163043d7d8f060ef4c19712eb1507f26d3345c32fa416ee48d8de3ac9b86b",
+    "src/observer/deployment.py": "b1bb73d0b8437b25663ba4efd9a4dd582da4d92253741ea4c03ac8af0db1e5fc",
+    "src/observer/desktop.py": "47f7f51ed919363358d1209526c54deacfb0c3ab8f3d6fc77f8539af5353b33f",
+    "src/observer/desktop_ipc.py": "23cc123f8513e5a43963784ac841ddaa5cafe275c71475cd6c831cacf1de20c1",
+    "src/observer/desktop_tray.py": "6f98aa48c837c283321a86e89de61cb57fe2988dcc1e7b7f52505dd762c4da6b",
+    "src/observer/focus.py": "92463eac65a9c4113def81836aff7cddc8a91b8ac245ce7b7042ae0aca77f78c",
+    "src/observer/frames.py": "e558c831cbdcc192d44f275a906a181886b7c4d5a64e0f7eb579b71981a25912",
+    "src/observer/frozen_entry.py": "81b42c79825bca21966a2e21452abcd106e8b0b693e04e06cbae8d37b99c8a2e",
+    "src/observer/fusion.py": "5e5f56859cd380e27804c062e670d891fa2e3f2d4a95a8f1a017aa6c4257c8f6",
+    "src/observer/history.py": "7c540ea96076f6cd3dda43857347c218fdca98be3141fdc49d1b589f0bb996e0",
+    "src/observer/history_calendar.py": "6dcbae50dc8033f7a24be92045cdec052b3f0b2e6cd1e67441b186e2ec3977d9",
+    "src/observer/live_validation.py": "066b34d30879c9f72fe1d3013cfc203ed40152cbfa60182431c78f492aca3185",
+    "src/observer/local_timezone.py": "2f90ce2e668490125fc396757d6158ee13cdbd27f32365eeffec5d52bab176a8",
+    "src/observer/models.py": "4983bf1703f2ee0769560f51fd75604c8313a0941b35949a63a29db51ff92d47",
+    "src/observer/object_detection.py": "ea523312b1001cc5fedcfb31baef6dfacf526067f7cd1d11713776d79c662282",
+    "src/observer/observations.py": "94669a9d630c5a1e817cfaaaa1fb1b31d8fd46aaeb60b77668f1add0fda836a2",
+    "src/observer/perception.py": "1219f388ab1e4aa1c02dc8fa20a2cdb065050f0e40f8a4f7498af6c8bd958a7a",
+    "src/observer/phone_verifier.py": "21868097bf709392cd72b9cee73a53a20fc589cf23e31d1c4341100210adad13",
+    "src/observer/power_events.py": "ee5b196fe1b9a3089f7769a984d8bd661c0f2fad2c9973a3ed9d140f0478a232",
+    "src/observer/product.py": "94588e08a02f20ebd25013825a597fe5c868a9b346e121a7c45cff151d961278",
+    "src/observer/product_cli.py": "05a4b2b1683c5f1306db6cd2430ef1ebdafe94ded658c2f5b6e5683f007f4878",
+    "src/observer/resources.py": "f439e124149a16839e0e8cbb7ea5601b83d0670ef42a8cf991b3721075cfa44d",
+    "src/observer/rules.py": "8e0e5b1f00993e62302160e0c76acf20c3e18dbf2560e9a2578d980f86ab6a24",
+    "src/observer/runtime_watch.py": "8e9af62ec5ccf02ddb3f4ee403eb1527556cc1f1597205f38cf11145c35f4da9",
+    "src/observer/scoring.py": "cda340e5b72879a8e75773ac57d32c95d21db15e0c74816ff33788e2829f3d83",
+    "src/observer/update_page.py": "0fc0f6e79feaeaf00e4abe062f7da0f322fbc4a424344e9a68fd798006de072b",
+    "src/observer/updates.py": "c4168bf0161f833b9affeceea970f1000189d63ce16792c0503dc546832295fd",
+    "src/observer/validation.py": "f2684acba83de7a86e3f6acc927811f43e060b38e28c4bb562595a13eb2dabc0",
+    "src/observer/vision.py": "80062a17bf8c38b97561e9ebf090ed51d71e1dfe5f57a43cf10ee684d59d40f3"
+  },
+  "inputs": {
+    "LICENSE": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "NOTICE": "2c71633ca1441e015e3b584d9cd50c395fbc1e9df8770efc8d264c504c15f62a",
+    "README.md": "dcb320e40f270b8317adc35b3e3fbf29569d1a8658dffc84ef0a89d88393283b",
+    "pyproject.toml": "5848503d515594d014ed75bc410e5d7ef64276a863c93b9b4ec41e3d742065f3",
+    "uv.lock": "9c5e2a9efd955795ab6ab6652a811c87d706a871d961cd8a42f26941fac79d2c",
+    "src/observer/default_config.json": "67a2d6a2890d8495147ab00390c02e7b329eb608829f7d3c796c214f57b41e06",
+    "scripts/build_windows.py": "d423f4a1f39b005da0bf731ca3663e04334c45745fe246736b6a629bb9fa08f1",
+    "scripts/build_windows.ps1": "8201339f32b517ebdcb99238e34fd7e3c25ae63891ced513461a83366c883ade",
+    "scripts/test_windows_candidate.py": "18a96271c3a0276040ffc1cc91fbdafe6c2a8faa2c68f47e4b1042e9d964b888",
+    "scripts/test_candidate_readonly.ps1": "171870a1d6ed63e98ad9de5b4c26789b1e3bf733c4d862025af869fcdf23d1d1",
+    "packaging/entry.py": "adb8008fe1dcb70f2e687610f2a2b2236dd7225157c98a82ed8e7362c1d7a860",
+    "packaging/frozen_diagnostics.py": "5267b5f191f31af0e39f2e870aead6683e3537057052a1e9ec20452d4bc6d4c8",
+    "packaging/licenses/GPL-3.0-only.txt": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "packaging/licenses/LGPL-3.0-only.txt": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+    "packaging/licenses/README.md": "ac45ad2bcbb74c82a64f2b111ded7a16ffd5317a1b80a7781612d57739a21498",
+    "packaging/Observer.spec": "32fbf1613760747c3ef813aefa8290d08ba5b57b3ee9e7b631da6f8ec225d3e6",
+    "packaging/PORTABLE-VALIDATION.txt": "5bf01e77c4ffc7b9f6d222911f1210d748aa5f53ae36d005b3b3f82555736c5e",
+    "packaging/REDISTRIBUTION.md": "2d5ea52e6347f1d68cb15d4babe66cde4c6c973a7b805e7b74af917c8c7d9038",
+    "packaging/requirements.in": "e73557181cd50db5ebe0a2a3811b90ad65f1d98e9c9be0a4309472f7718c8a4d",
+    "packaging/requirements.lock": "3c1d9f04a2474c00d77e563c8bb177b44aba99506cc56b4e3782aa73da646ec7",
+    "packaging/SOURCE-DELIVERY.txt": "5a648e090e0e2a07677fc71527973406708ca9913a2072c91d44ae01dc9b79b6",
+    "packaging/START-HERE.txt": "1467f4f29845698692f5c8de8aa34f94e7cf36b3ec98dcea8e1d5871e21880f4",
+    "models/manifest.json": "b049addf45643a8b2feff4281be0a1aede74ab45c7d49aa2f95a930572c9fb59",
+    "models/face_landmarker.task": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+    "models/pose_landmarker_lite.task": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+    "models/efficientdet_lite0_int8.tflite": "0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb",
+    "models/yolo/observer-phone-s304-e2b.onnx": "acdfa05d0c1cc4d626f84fd010f61cd17d62636b95d9f71fe20f22ad281d23f5",
+    "models/yolo/phone-proposal-verifier.xml": "73edae8868ebf8788fa235ce3bab9e12a97952ec8e22a2874486e56eec763469"
+  },
+  "packages": [
+    {
+      "name": "absl-py",
+      "version": "2.5.0"
+    },
+    {
+      "name": "altgraph",
+      "version": "0.17.5"
+    },
+    {
+      "name": "attrs",
+      "version": "26.1.0"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1"
+    },
+    {
+      "name": "contourpy",
+      "version": "1.3.3"
+    },
+    {
+      "name": "cycler",
+      "version": "0.12.1"
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19"
+    },
+    {
+      "name": "fonttools",
+      "version": "4.63.0"
+    },
+    {
+      "name": "jax",
+      "version": "0.7.1"
+    },
+    {
+      "name": "jaxlib",
+      "version": "0.7.1"
+    },
+    {
+      "name": "kiwisolver",
+      "version": "1.5.1"
+    },
+    {
+      "name": "matplotlib",
+      "version": "3.11.1"
+    },
+    {
+      "name": "mediapipe",
+      "version": "0.10.21"
+    },
+    {
+      "name": "ml_dtypes",
+      "version": "0.5.4"
+    },
+    {
+      "name": "numpy",
+      "version": "1.26.4"
+    },
+    {
+      "name": "observer-focus",
+      "version": "0.1.0"
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.29.0"
+    },
+    {
+      "name": "opencv-contrib-python",
+      "version": "4.11.0.86"
+    },
+    {
+      "name": "opt_einsum",
+      "version": "3.4.0"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "name": "pefile",
+      "version": "2024.8.26"
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0"
+    },
+    {
+      "name": "protobuf",
+      "version": "4.25.9"
+    },
+    {
+      "name": "psutil",
+      "version": "7.2.2"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0"
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.22.3"
+    },
+    {
+      "name": "pyinstaller-hooks-contrib",
+      "version": "2026.8"
+    },
+    {
+      "name": "pyparsing",
+      "version": "3.3.2"
+    },
+    {
+      "name": "PySide6",
+      "version": "6.11.2"
+    },
+    {
+      "name": "PySide6_Addons",
+      "version": "6.11.2"
+    },
+    {
+      "name": "PySide6_Essentials",
+      "version": "6.11.2"
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0"
+    },
+    {
+      "name": "pywin32-ctypes",
+      "version": "0.2.3"
+    },
+    {
+      "name": "scipy",
+      "version": "1.17.1"
+    },
+    {
+      "name": "sentencepiece",
+      "version": "0.2.2"
+    },
+    {
+      "name": "setuptools",
+      "version": "84.0.0"
+    },
+    {
+      "name": "shiboken6",
+      "version": "6.11.2"
+    },
+    {
+      "name": "six",
+      "version": "1.17.0"
+    },
+    {
+      "name": "sounddevice",
+      "version": "0.5.6"
+    },
+    {
+      "name": "tzdata",
+      "version": "2026.4"
+    },
+    {
+      "name": "tzlocal",
+      "version": "5.4.4"
+    }
+  ],
+  "status": "internal candidate; F acceptance and redistribution review pending; E closed"
+}

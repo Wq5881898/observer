@@ -40,6 +40,8 @@ from observer.power_events import WindowsPowerEventFilter
 from observer.deployment import source_identity
 from observer.updates import current_version
 from observer.update_page import UpdatePage
+from observer.history import minutes_text
+from observer.history_calendar import HistoryCalendar
 
 STATES = {'idle': '等待开始', 'monitoring': '观察中', 'paused': '已暂停',
           'resting': '计划休息中',
@@ -261,7 +263,7 @@ def data_status_text(status):
     return (f"本地：{status['sessions']} 条记录 · {status['tasks']} 个任务 · "
             f"{status.get('plans', 0)} 个重复计划 · "
             f"{status['images']} 张图片/{storage} · "
-            f"截图{mode}{test_mode} · 保留{status['retention_days']}天{problem}")
+            f"截图{mode}{test_mode} · 截图保留{status['retention_days']}天 · 记录长期保留{problem}")
 
 
 def user_error_message(error) -> str:
@@ -316,7 +318,9 @@ def session_event_rows(store: ProductStore, result: dict | None) -> list[dict]:
             item['signals'] = []
         item['image_path'] = None
         item['image_status'] = '未保存图片'
-        if item.get('error'):
+        if item.get('expired_at'):
+            item['image_status'] = '截图已过期清理'
+        elif item.get('error'):
             item['image_status'] = '图片保存失败：' + item['error']
         elif item.get('path'):
             try:
@@ -409,7 +413,7 @@ def session_event_rows(store: ProductStore, result: dict | None) -> list[dict]:
 class DesktopWorker(QThread):
     snapshot = Signal(dict)
     notice = Signal(str)
-    detail = Signal(str)
+    detail = Signal(str, str)
     busy = Signal(bool)
     reminder = Signal(str, str, str)
     task_notification = Signal(str, str)
@@ -443,6 +447,7 @@ class DesktopWorker(QThread):
         self.service = None
         self.storage_snapshot = None
         self.today_snapshot = None
+        self.calendar_snapshot = None
         self.next_storage_refresh = 0.
         self.resource_tracker = None
         self.last_session_id = None
@@ -584,7 +589,7 @@ class DesktopWorker(QThread):
             resources = self.resource_tracker.finish(at) if self.resource_tracker else None
             result = self.service.end(at, utc_now(), reason, detail, resources)
             self.invalidate_storage_status()
-            self.detail.emit(summary_text(result))
+            self.detail.emit(result['id'], summary_text(result))
         finally:
             self.stop_source()
             self.start_model_prewarm()
@@ -618,8 +623,9 @@ class DesktopWorker(QThread):
         if self.storage_snapshot is None or at >= self.next_storage_refresh:
             self.storage_snapshot = self.store.data_status()
             self.today_snapshot = self.store.today_summary(utc_now(), get_localzone_name())
+            self.calendar_snapshot = self.store.history_calendar(utc_now(), get_localzone_name())
             self.next_storage_refresh = at + 5
-        history = self.store.history()
+        history = self.store.history(limit=1)
         current = self.store.summary(service.identifier) if service.identifier else None
         focus_session = current
         if focus_session is None and self.last_session_id:
@@ -639,6 +645,7 @@ class DesktopWorker(QThread):
                             if service.state == 'resting' else 0,
                             'tasks': self.store.tasks(), 'plans': self.store.plans(),
                             'history': history,
+                            'history_calendar': self.calendar_snapshot,
                             'focus_session': focus_session,
                             'focus_events': session_event_rows(self.store, focus_session),
                             'images': self.store.setting('images'),
@@ -727,16 +734,16 @@ class DesktopWorker(QThread):
             store.retry_task(values[0], utc_now())
             self.notice.emit('任务已重新进入待开始状态')
         elif command == 'show':
-            self.detail.emit(summary_text(store.summary(values[0])))
+            self.detail.emit(values[0], summary_text(store.summary(values[0])))
         elif command == 'delete-session':
             store.delete_session(values[0])
             self.invalidate_storage_status()
-            self.detail.emit('')
+            self.detail.emit(values[0], '')
             self.notice.emit('记录及其事件图片已删除')
         elif command == 'purge':
             removed = store.purge(utc_now())
             self.invalidate_storage_status()
-            self.notice.emit(f'已清理 {removed} 条过期记录')
+            self.notice.emit(f'已清理 {removed} 张过期截图；任务和文字日志已保留')
         elif command == 'images':
             store.set_images(values[0])
             if not values[0]:
@@ -767,7 +774,7 @@ class DesktopWorker(QThread):
             self.store.materialize_plans(startup_now)
             self.store.expire_pending_tasks(startup_now)
             self.store.purge(startup_now)
-            history = self.store.history()
+            history = self.store.history(limit=1)
             self.last_session_id = history[0]['id'] if history else None
             self.publish()
             self.busy.emit(False)
@@ -1130,24 +1137,43 @@ class ObserverWindow(QMainWindow):
         self.tasks = QListWidget()
         history_page = QWidget()
         history_layout = QVBoxLayout(history_page)
+        history_layout.setSpacing(8)
         self.data_status = QLabel('正在读取本地数据…')
         self.data_status.setWordWrap(True)
         self.data_status.setStyleSheet('color:#64748b;')
         history_layout.addWidget(self.data_status)
-        history_layout.addWidget(self.history)
+        self.history_payload = None
+        self.history_render_signature = None
+        self.history_detail_id = None
+        self.history_calendar = HistoryCalendar()
+        self.history_calendar.date_selected.connect(self.history_day_changed)
+        history_layout.addWidget(self.history_calendar)
+        self.history_day_summary = QLabel('今天 · 正在读取…')
+        self.history_day_summary.setWordWrap(True)
+        self.history_day_summary.setStyleSheet('font-weight:600;color:#0f172a;')
+        history_layout.addWidget(self.history_day_summary)
+        self.history.setMinimumHeight(80)
+        self.history.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        history_layout.addWidget(self.history, 2)
+        self.history_empty = QLabel('当天暂无任务')
+        self.history_empty.setStyleSheet('color:#64748b;padding:10px;')
+        self.history_empty.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.history_empty.setMinimumHeight(80)
+        self.history_empty.hide()
+        history_layout.addWidget(self.history_empty, 2)
         history_buttons = QHBoxLayout()
         self.delete_history = QPushButton('删除选中记录')
         self.delete_history.clicked.connect(self.delete_selected_history)
-        self.purge_history = QPushButton('清理过期记录')
+        self.purge_history = QPushButton('清理过期截图')
         self.purge_history.clicked.connect(lambda: self.send('purge'))
         history_buttons.addWidget(self.delete_history)
         history_buttons.addWidget(self.purge_history)
         history_layout.addLayout(history_buttons)
         self.details = QTextEdit()
         self.details.setReadOnly(True)
-        self.details.setPlaceholderText('结束后显示摘要，也可以点击历史记录查看。')
-        self.details.setMinimumHeight(150)
-        history_layout.addWidget(self.details)
+        self.details.setPlaceholderText('选择一个任务查看详细日志。')
+        self.details.setMinimumHeight(120)
+        history_layout.addWidget(self.details, 3)
         tabs.addTab(history_page, '历史')
         advanced_page = QWidget()
         advanced_layout = QVBoxLayout(advanced_page)
@@ -1253,7 +1279,7 @@ class ObserverWindow(QMainWindow):
         tabs.addTab(advanced_page, '高级计划')
         self.update_page = UpdatePage(self, args)
         tabs.addTab(self.update_page, '版本与更新')
-        self.history.itemClicked.connect(lambda item: self.worker.submit('show', item.data(Qt.ItemDataRole.UserRole)))
+        self.history.currentItemChanged.connect(self.history_item_changed)
         self.plans.itemClicked.connect(self.load_plan)
         self.plan_recurrence.currentIndexChanged.connect(self.update_plan_fields)
         self.plan_break_enabled.toggled.connect(self.update_plan_fields)
@@ -1322,7 +1348,7 @@ class ObserverWindow(QMainWindow):
         self.worker.reminder.connect(self.show_reminder)
         self.worker.task_notification.connect(self.show_task_notification)
         self.worker.session_completed.connect(self.show_session_completed)
-        self.worker.detail.connect(self.details.setPlainText)
+        self.worker.detail.connect(self.show_history_detail)
         self.worker.busy.connect(self.set_busy)
         self.worker.finished.connect(self.worker_finished)
         self.update_buttons()
@@ -1546,6 +1572,92 @@ class ObserverWindow(QMainWindow):
         if item:
             self.send('delete-session', item.data(Qt.ItemDataRole.UserRole))
 
+    def history_day_changed(self, _day):
+        self.history_render_signature = None
+        self.render_history()
+
+    def history_item_changed(self, item, _previous=None):
+        self.details.clear()
+        self.history_detail_id = None
+        if item is not None and item.data(Qt.ItemDataRole.UserRole):
+            self.worker.submit('show', item.data(Qt.ItemDataRole.UserRole))
+        self.update_buttons()
+
+    @Slot(str, str)
+    def show_history_detail(self, identifier, text):
+        item = self.history.currentItem()
+        if item is not None and item.data(Qt.ItemDataRole.UserRole) == identifier:
+            if text and self.history_payload:
+                row = next((r for r in self.history_payload['rows'] if r['id'] == identifier), None)
+                if row and row['timing_note']:
+                    text = row['timing_note'] + '\n\n' + text
+            if self.details.toPlainText() == text:
+                self.history_detail_id = identifier
+                return
+            same_task = self.history_detail_id == identifier
+            vertical = self.details.verticalScrollBar().value()
+            horizontal = self.details.horizontalScrollBar().value()
+            self.details.setPlainText(text)
+            self.history_detail_id = identifier
+            if same_task:
+                self.details.verticalScrollBar().setValue(vertical)
+                self.details.horizontalScrollBar().setValue(horizontal)
+
+    def render_history(self):
+        if not self.history_payload or self.history_calendar.selected is None:
+            return
+        selected = self.history_calendar.selected.isoformat()
+        records = [r for r in self.history_payload['rows'] if r['day'] == selected]
+        rows = []
+        for row in records:
+            local = datetime.fromisoformat(row['day_started']).astimezone()
+            stamp = local.strftime('%m-%d %H:%M')
+            suffix = {'demo': ' · 模拟', 'real': '', 'unknown': ' · 身份异常'}[row['mode']]
+            if datetime.fromisoformat(row['started']).astimezone().date().isoformat() != selected:
+                suffix += ' · 跨日'
+            text = (f'{stamp}｜{minutes_text(row["seconds"])}｜{row["title"]}｜'
+                    f'{STATES.get(row["state"], row["state"])}{suffix}')
+            rows.append((row['id'], text))
+        info = self.history_payload['days'].get(selected, {})
+        total = minutes_text(info.get('seconds', 0.))
+        self.history_day_summary.setText(f'{selected} · {len(records)}个任务 · 累计{total}')
+        if info.get('demo_tasks'):
+            self.history_day_summary.setText(self.history_day_summary.text() + '（模拟不计入累计）')
+        if info.get('unknown_duration_tasks'):
+            self.history_day_summary.setText(self.history_day_summary.text() + '（部分旧记录时长未知）')
+        self.history.setVisible(bool(records))
+        self.history_empty.setVisible(not records)
+        signature = (selected, rows, [r['timing_note'] for r in records])
+        if signature == self.history_render_signature:
+            return
+        same_day = bool(self.history_render_signature and self.history_render_signature[0] == selected)
+        scroll = self.history.verticalScrollBar().value()
+        self.history_render_signature = signature
+        previous = self.history.currentItem()
+        previous_id = previous.data(Qt.ItemDataRole.UserRole) if previous else None
+        self.history.blockSignals(True)
+        try:
+            self.fill_list(self.history, rows)
+            if rows and self.history.currentItem() is None:
+                self.history.setCurrentRow(0)
+            for index, row in enumerate(records):
+                hint = rows[index][1]
+                if row['timing_note']:
+                    hint += '\n' + row['timing_note']
+                self.history.item(index).setToolTip(hint)
+        finally:
+            self.history.blockSignals(False)
+        item = self.history.currentItem()
+        identifier = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if identifier != previous_id or identifier is None:
+            self.details.clear()
+            self.history_detail_id = None
+        elif same_day:
+            self.history.verticalScrollBar().setValue(scroll)
+        if identifier:
+            self.worker.submit('show', identifier)
+        self.update_buttons()
+
     @Slot(bool)
     def images_changed(self, enabled):
         self.worker.submit('images', enabled)
@@ -1762,7 +1874,9 @@ class ObserverWindow(QMainWindow):
             button.setStyleSheet(
                 ACTION_BUTTON_ENABLED_STYLE if button.isEnabled()
                 else ACTION_BUTTON_DISABLED_STYLE)
-        self.delete_history.setEnabled(available)
+        selected_history = self.history.currentItem()
+        self.delete_history.setEnabled(available and selected_history is not None
+                                       and bool(selected_history.data(Qt.ItemDataRole.UserRole)))
         self.purge_history.setEnabled(available)
         editable = available and self.state == 'idle'
         self.title.setEnabled(editable)
@@ -1865,9 +1979,10 @@ class ObserverWindow(QMainWindow):
             self.demo_signal.blockSignals(False)
         def local(stamp):
             return datetime.fromisoformat(stamp).astimezone().strftime('%m-%d %H:%M')
-        self.fill_list(self.history, [(r['id'], f"{local(r['started'])}  {r['title']} · {STATES.get(r['state'],r['state'])}" +
-                                      {'demo': ' · 模拟', 'real': '', 'unknown': ' · 身份异常'}[r['mode']])
-                                     for r in snapshot['history']])
+        if snapshot.get('history_calendar'):
+            self.history_payload = snapshot['history_calendar']
+            self.history_calendar.set_data(self.history_payload)
+            self.render_history()
         self.fill_list(self.tasks, [(r['id'], f"{local(r['starts'])}  {r['title']} · {STATES.get(r['state'],r['state'])}" +
                                     (f"\n{user_error_message(r['error'])[:120]}"
                                      if r.get('error') else ''))

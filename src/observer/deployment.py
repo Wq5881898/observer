@@ -24,7 +24,7 @@ def user_root() -> Path:
 
 
 def default_data_dir() -> Path:
-    return user_root() / 'product' if is_frozen() else Path('data/product')
+    return user_root() / 'phone-trial-20261106' if is_frozen() else Path('data/product')
 
 
 def default_profile() -> Path:

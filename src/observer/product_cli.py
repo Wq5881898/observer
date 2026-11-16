@@ -26,8 +26,8 @@ from observer.rules import ActionKind, RulePhase
 from observer.deployment import default_data_dir, default_models_dir, default_profile, source_identity
 
 FROZEN_MODEL = Path('models/yolo/observer-phone-s304-e2b.onnx')
-FROZEN_SHA = 'c4a8a791e227780b334e075d671d4347ed9d5fee7474d6f017659366709c486f'
-FROZEN_MODEL_SIZE = 10_604_662
+FROZEN_SHA = 'acdfa05d0c1cc4d626f84fd010f61cd17d62636b95d9f71fe20f22ad281d23f5'
+FROZEN_MODEL_SIZE = 10_565_246
 FROZEN_MANIFEST_SHA = 'b049addf45643a8b2feff4281be0a1aede74ab45c7d49aa2f95a930572c9fb59'
 FROZEN_CONFIG_SHA = '67a2d6a2890d8495147ab00390c02e7b329eb608829f7d3c796c214f57b41e06'
 FROZEN_PHONE_SCORE_THRESHOLD = .25
@@ -35,7 +35,7 @@ FROZEN_PHONE_RETAIN_SECONDS = 1.5
 FROZEN_PHONE_CENTER_DISTANCE = .18
 FROZEN_PHONE_CONFIRMATION_HITS = 2
 # Enabled only by a build that also pins and delivers the trained verifier.
-FROZEN_PHONE_VERIFIER_SHA: str | None = None
+FROZEN_PHONE_VERIFIER_SHA: str | None = '73edae8868ebf8788fa235ce3bab9e12a97952ec8e22a2874486e56eec763469'
 DEFAULT_PROFILE = Path('data/calibration/default.json')
 STALE_FRAME_SECONDS = 5.0
 FRESH_FRAME_SECONDS = .75
@@ -1103,7 +1103,7 @@ def dispatch(args):
             print(f"会话 {status['sessions']} | 任务 {status['tasks']} | "
                   f"重复计划 {status['plans']} | "
                   f"图片 {status['images']} ({status['image_bytes']} bytes) | "
-                  f"截图 {image_mode} | 保留 {status['retention_days']} 天 | "
+                  f"截图 {image_mode} | 截图保留 {status['retention_days']} 天，记录长期保留 | "
                   f"证据异常 {status['evidence_errors']}")
         elif command == 'show':
             show_summary(store.summary(args.id))
@@ -1113,7 +1113,7 @@ def dispatch(args):
         elif command == 'delete':
             store.delete_session(args.id)
         elif command == 'purge':
-            print(f'已清理 {store.purge(utc_now())} 个过期会话')
+            print(f'已清理 {store.purge(utc_now())} 张过期截图；任务和文字日志已保留')
         return 0
     except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
         print(f'Observer：{exc}')

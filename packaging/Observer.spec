@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 root = Path(SPECPATH).parent
 stage = Path(os.environ['OBSERVER_BUILD_STAGE'])
 model_files = ['manifest.json', 'face_landmarker.task', 'pose_landmarker_lite.task',
-               'efficientdet_lite0_int8.tflite', 'yolo/observer-phone-s304-e2b.onnx']
+               'efficientdet_lite0_int8.tflite', 'yolo/observer-phone-s304-e2b.onnx', 'yolo/phone-proposal-verifier.xml']
 datas = [(str(root / 'models' / name), str(Path('models') / Path(name).parent))
          for name in model_files]
 datas += [(str(root / 'src/observer/default_config.json'), 'observer'),

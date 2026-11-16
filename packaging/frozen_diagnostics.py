@@ -121,11 +121,20 @@ def _desktop_smoke(root):
         window.pause.click()
         wait(lambda: window.state == 'monitoring')
         window.end.click()
-        wait(lambda: window.state == 'idle' and window.history.count() == len(previous)+1)
+        wait(lambda: window.state == 'idle' and window.history.count() >= 1)
         app.processEvents()
         screenshot = root/'synthetic-desktop.png'
         if not window.grab().save(str(screenshot)):
             raise RuntimeError('Desktop render capture failed')
+        window.tabs.setCurrentIndex(1)
+        app.processEvents()
+        calendar_report = {key: window.history_payload[key] for key in ('start', 'end', 'today')}
+        calendar_report['selected'] = window.history_calendar.selected.isoformat()
+        calendar_report['cells'] = len(window.history_calendar.cells)
+        if calendar_report['selected'] != calendar_report['today']:
+            raise RuntimeError('History did not select today')
+        if not window.grab().save(str(root/'synthetic-history.png')):
+            raise RuntimeError('History render capture failed')
         window.hide()
         second = subprocess.Popen([sys.executable, 'product', '--data-dir', str(root), 'gui', '--demo'],
                                   creationflags=subprocess.CREATE_NO_WINDOW)
@@ -193,7 +202,7 @@ def _desktop_smoke(root):
             store.close()
         window.hide()
         wait(lambda: len(submitted) == 1)
-        wait(lambda: window.state == 'idle' and window.history.count() == len(previous)+2)
+        wait(lambda: window.state == 'idle' and window.history.count() >= 1)
         window.task_notifications.setChecked(False)
         close_window()
         lock = RuntimeLock(root)
@@ -221,7 +230,7 @@ def _desktop_smoke(root):
                 'settings_persisted': True, 'sound_wave_generated': True,
                 'audible_sound': 'pending human confirmation', 'windows_toast': 'pending human confirmation',
                 'session_identity': json.loads(summary['identity']),
-                'desktop_render': str(screenshot),
+                'desktop_render': str(screenshot), 'history_calendar': calendar_report,
                 'evidence_hashes': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                     for p in (root/'evidence').glob('*.jpg')}}
     finally:

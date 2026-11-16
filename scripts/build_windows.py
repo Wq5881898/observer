@@ -99,7 +99,7 @@ def main():
                      if p.is_file() and '__pycache__' not in p.parts)
     inputs += [ROOT/'models'/n for n in ('manifest.json', 'face_landmarker.task',
               'pose_landmarker_lite.task', 'efficientdet_lite0_int8.tflite',
-              'yolo/observer-phone-s304-e2b.onnx')]
+              'yolo/observer-phone-s304-e2b.onnx', 'yolo/phone-proposal-verifier.xml')]
     from observer import __version__
     info = {'build_id': args.build_id, 'version': __version__,
             'created_utc': datetime.now(timezone.utc).isoformat(),
