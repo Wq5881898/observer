@@ -7,6 +7,8 @@ import math
 import os
 import re
 import sqlite3
+import stat
+from fnmatch import fnmatch
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -154,6 +156,9 @@ def product_rule_configs():
                 config,
                 trigger_after_seconds=(10.0 if config.signal_name == 'attention_away'
                                        else config.trigger_after_seconds),
+                maximum_pending_sample_gap_seconds=(
+                    config.trigger_after_seconds if config.signal_name == 'away' else None
+                ),
                 initial_penalty_points=0.0,
                 repeat_penalty_points=0.0,
                 maximum_penalty_points=0.0,
@@ -1143,13 +1148,15 @@ class ProductStore:
         tasks = self.db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         plans = self.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
         image_count = image_bytes = evidence_errors = 0
+        sizes = self._evidence_file_sizes()
         for row in self.db.execute("SELECT path,sha256,error FROM evidence WHERE expired_at IS NULL"):
             if row['error'] or not row['path'] or not row['sha256']:
                 evidence_errors += 1
                 continue
             try:
-                path = self.safe_image_path(row['path'])
-                size = path.stat().st_size
+                size = sizes.get(row['path'])
+                if size is None:
+                    size = self.safe_image_path(row['path']).stat().st_size
             except (OSError, ValueError):
                 evidence_errors += 1
             else:
@@ -1166,6 +1173,27 @@ class ProductStore:
             'test_evidence_enabled': self.setting('test_evidence'),
             'retention_days': self.setting('retention_days'),
         }
+
+    def _evidence_file_sizes(self):
+        """Read flat evidence files together, keeping links on the validated path."""
+        base = self.root / 'evidence'
+        if base.resolve() != base:
+            return {}
+        sizes = {}
+        try:
+            with os.scandir(base) as entries:
+                for entry in entries:
+                    try:
+                        info = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if (stat.S_ISREG(info.st_mode) and not
+                            getattr(info, 'st_file_attributes', 0)
+                            & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                        sizes[f'evidence/{entry.name}'] = info.st_size
+        except OSError:
+            return {}
+        return sizes
 
     def recover_evidence(self):
         """Reconcile crash leftovers after the caller has acquired RuntimeLock."""
@@ -1350,7 +1378,10 @@ class ProductStore:
             if not ok:
                 raise ValueError("证据图编码失败")
             raw = encoded.tobytes()
-            if len(raw)+sum(p.stat().st_size for p in target.parent.glob('*.jpg')) > 500 * 1024**2:
+            with os.scandir(target.parent) as images:
+                existing_bytes = sum(entry.stat().st_size for entry in images
+                                     if fnmatch(entry.name, '*.jpg'))
+            if len(raw) + existing_bytes > 500 * 1024**2:
                 raise ValueError("证据图配额已满")
             relative = target.relative_to(self.root).as_posix()
             # Persist intent first: a crash leaves a known, deletable path.

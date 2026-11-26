@@ -123,21 +123,21 @@ class FocusIncidentTracker:
             if signal not in self.scoring_signals:
                 continue
             if action.kind is ActionKind.ACTIVATED:
+                # A gap can restart a candidate without moving it to CLEAR.
+                # Keep only observations belonging to the confirmed attempt.
+                start = action.event_started_monotonic
+                segments = [segment for segment in self.buffers[signal] if segment[0] >= start]
                 if self.current is None:
-                    start = min(
-                        (segment[0] for segment in self.buffers[signal]),
-                        default=action.event_started_monotonic,
-                    )
                     self.current = FocusIncident(str(uuid4()), start, now)
                     self.incidents.append(self.current)
                     created = True
                 else:
                     created = False
                     self.current.started = min(
-                        self.current.started, action.event_started_monotonic
+                        self.current.started, start
                     )
                 target = self.current.segments.setdefault(signal, [])
-                target.extend(self.buffers[signal])
+                target.extend(segments)
                 self.buffers[signal] = target
                 self.confirmed[signal] = True
                 self.current.signals.add(signal)
@@ -163,7 +163,8 @@ class FocusIncidentTracker:
             for signal in self.scoring_signals
         )
         if incident.alert_at is None and (
-            not pending or now - incident.first_activated >= self.alert_wait_seconds
+            'away' in incident.signals
+            or not pending or now - incident.first_activated >= self.alert_wait_seconds
         ):
             incident.alert_at = now
             output.append(self._new_action(ActionKind.ALERT, now, incident.label))

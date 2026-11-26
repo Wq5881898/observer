@@ -1,5 +1,6 @@
 """E1 lifecycle tests with real Qt/worker/SQLite and a simulated tray shell."""
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -301,6 +302,43 @@ class DesktopLifecycleTests(unittest.TestCase):
             summary = store.summary(store.history()[0]['id'])
             self.assertEqual(summary['state'], 'interrupted')
             self.assertEqual(summary['error'], '模拟睡眠恢复')
+
+    def test_slow_read_keeps_session_and_excludes_missing_time(self):
+        entered, release = self.gate(), self.gate()
+
+        class SlowReadSource(DemoSource):
+            def read(self, at):
+                if not entered.is_set():
+                    entered.set()
+                    if not release.wait(5):
+                        raise RuntimeError('test did not release the simulated read')
+                return super().read(at)
+
+        window = self.open(SlowReadSource)
+        window.worker.runtime_watch.max_gap = .2
+        window.start.click()
+        self.wait_for(entered.is_set)
+        identifier = window.worker.service.identifier
+        time.sleep(.45)
+        release.set()
+        self.wait_for(lambda: '已跳过这段时间并继续计时' in window.message.text())
+        self.assertEqual(window.worker.service.identifier, identifier)
+        self.assertEqual(window.state, 'monitoring')
+        window.end.click()
+        self.wait_for(lambda: window.state == 'idle')
+        with ProductStoreContext(self.args.data_dir) as store:
+            self.assertEqual(store.history()[0]['state'], 'ended')
+            intervals = store.db.execute(
+                'SELECT started,ended FROM session_work WHERE session_id=? ORDER BY sequence',
+                (identifier,),
+            ).fetchall()
+        self.assertEqual(len(intervals), 2)
+        self.assertGreater(intervals[1]['started'], intervals[0]['ended'])
+        log = self.args.data_dir / 'logs' / 'runtime-gaps.jsonl'
+        entry = json.loads(log.read_text(encoding='utf-8').splitlines()[0])
+        self.assertEqual(entry['handling'], 'resume')
+        self.assertEqual(entry['operation'], '摄像头读取与视觉推理')
+        self.assertGreaterEqual(entry['unobserved_seconds'], .4)
 
     def test_runtime_gap_keeps_manually_paused_session_paused(self):
         window = self.open()

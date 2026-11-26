@@ -35,7 +35,7 @@ from observer.resources import SessionResourceTracker
 from observer.rules import ActionKind
 from observer.desktop_tray import DesktopTray
 from observer.desktop_ipc import SingleInstanceWake
-from observer.runtime_watch import RuntimeWatch
+from observer.runtime_watch import RuntimeWatch, WORKER_STALL_REASON
 from observer.power_events import WindowsPowerEventFilter
 from observer.deployment import source_identity
 from observer.updates import current_version
@@ -72,12 +72,12 @@ ACTION_BUTTON_DISABLED_STYLE = (
 )
 
 
-def append_startup_log(data_dir: Path, record: dict) -> Path:
-    """Append one privacy-safe startup result to a bounded local JSONL log."""
+def append_startup_log(data_dir: Path, record: dict, *, name='startup') -> Path:
+    """Append one diagnostic record to a bounded local JSONL log."""
     log_dir = Path(data_dir).resolve() / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
-    path = log_dir / 'startup.jsonl'
-    backup = log_dir / 'startup.previous.jsonl'
+    path = log_dir / f'{name}.jsonl'
+    backup = log_dir / f'{name}.previous.jsonl'
     encoded = (json.dumps(record, ensure_ascii=False, sort_keys=True) + '\n').encode('utf-8')
     if path.is_file() and path.stat().st_size + len(encoded) > STARTUP_LOG_MAX_BYTES:
         backup.unlink(missing_ok=True)
@@ -594,8 +594,9 @@ class DesktopWorker(QThread):
             self.stop_source()
             self.start_model_prewarm()
 
-    def check_runtime_continuity(self):
-        clock_reason = self.runtime_watch.check(time.monotonic(), time.time())
+    def check_runtime_continuity(self, operation, *, read_error=None):
+        at = time.monotonic()
+        clock_reason = self.runtime_watch.check(at, time.time())
         with self.power_event_lock:
             power_reason = self.power_event_reason
             self.power_event_reason = None
@@ -604,10 +605,38 @@ class DesktopWorker(QThread):
             return False
         if self.service.state == 'paused':
             return False
+        now = utc_now()
+        recoverable = (not power_reason and clock_reason == WORKER_STALL_REASON
+                       and self.service.state == 'monitoring' and self.source is not None
+                       and read_error is None)
+        gap_seconds = max(0., at - self.service.last_at)
+        record = {
+            'timestamp': now.isoformat(), 'session_id': self.service.identifier,
+            'operation': operation, 'reason': reason,
+            'checkpoint_gap_seconds': round(self.runtime_watch.elapsed, 3),
+            'wall_gap_seconds': round(self.runtime_watch.wall_elapsed, 3),
+            'unobserved_seconds': round(gap_seconds, 3),
+            'handling': 'resume' if recoverable else 'interrupt',
+        }
+        if read_error is not None:
+            record['read_error'] = str(read_error)
+        try:
+            append_startup_log(self.args.data_dir, record, name='runtime-gaps')
+        except OSError:
+            pass
+        self.evidence_recorder.reset()
+        if recoverable:
+            # Split the work interval at the last observation and preserve the
+            # remaining timer. The caller discards any pre-stall observation.
+            self.service.pause(self.service.last_at, now)
+            self.service.resume(at, now)
+            self.notice.emit(f'观察卡顿 {gap_seconds:.1f} 秒，已跳过这段时间并继续计时。')
+            return True
         if self.service.state == 'monitoring':
             # Break at the last accounted instant, never extend a pre-gap signal.
-            self.service.source_gap(self.service.last_at, utc_now(), reason)
-        self.evidence_recorder.reset()
+            self.service.source_gap(self.service.last_at, now, reason)
+        if read_error is not None and not power_reason:
+            reason = f'{reason}：{read_error}'
         self.finish_session('interrupted', reason)
         self.notice.emit(f'会话已中断：{reason}。已保存记录，请重新开始。')
         return True
@@ -784,7 +813,7 @@ class DesktopWorker(QThread):
             next_plan_refresh = time.monotonic() + 60
             while not self.isInterruptionRequested():
                 at, now = time.monotonic(), utc_now()
-                if self.check_runtime_continuity():
+                if self.check_runtime_continuity('会话循环'):
                     next_publish = 0
                 if at >= next_plan_refresh:
                     result = self.store.materialize_plans(now)
@@ -865,7 +894,8 @@ class DesktopWorker(QThread):
                     try:
                         observation = self.source.read(time.monotonic())
                     except SourceStalled as exc:
-                        if self.check_runtime_continuity():
+                        if (self.check_runtime_continuity('摄像头读取')
+                                and self.service.identifier is None):
                             self.publish()
                             continue
                         if self.evidence_recorder.finish(
@@ -880,20 +910,21 @@ class DesktopWorker(QThread):
                             self.finish_session('interrupted', detail)
                             self.notice.emit(f'会话已中断：{detail}。可以重新开始。')
                         else:
-                            if self.check_runtime_continuity():
+                            if (self.check_runtime_continuity('摄像头重连')
+                                    and self.service.identifier is None):
                                 self.publish()
                                 continue
                             self.notice.emit('摄像头已恢复，会话继续。')
                         next_publish = 0
                     except Exception as exc:
-                        if self.check_runtime_continuity():
+                        if self.check_runtime_continuity('视觉推理', read_error=exc):
                             self.publish()
                             continue
                         self.finish_session('interrupted', str(exc))
                         self.notice.emit(f'会话已中断：{exc}。可以重新开始。')
                         next_publish = 0
                     else:
-                        if self.check_runtime_continuity():
+                        if self.check_runtime_continuity('摄像头读取与视觉推理'):
                             self.publish()
                             next_publish = time.monotonic() + .5
                             continue
@@ -916,9 +947,14 @@ class DesktopWorker(QThread):
                                 self.store, self.service, self.source.frame,
                                 observation, actions):
                             self.invalidate_storage_status()
+                        if self.check_runtime_continuity('保存会话和截图'):
+                            next_publish = 0
                 if at >= next_publish:
                     self.publish()
-                    next_publish = at + (.5 if self.ui_visible else 5.)
+                    if not self.check_runtime_continuity('刷新界面'):
+                        next_publish = at + (.5 if self.ui_visible else 5.)
+                    else:
+                        next_publish = 0
                 if at >= next_purge:
                     self.store.purge(now)
                     next_purge = at + 3600
@@ -1813,7 +1849,10 @@ class ObserverWindow(QMainWindow):
                     else '已记录（健康提醒冷却中）')
             if item['resolved_offset'] is not None:
                 duration = item['resolved_offset'] - item['offset']
-                details.append(f'{duration:.1f}秒后恢复')
+                if item.get('test_candidate'):
+                    details.append(f'取证跨度 {duration:.1f} 秒')
+                else:
+                    details.append(f'{duration:.1f}秒后恢复')
             label = ' · '.join(html.escape(value) for value in details)
             if item.get('image_path'):
                 image = (f'<a href="evidence:{item["event_id"]}">查看'

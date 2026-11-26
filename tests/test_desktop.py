@@ -1121,27 +1121,33 @@ class DesktopTests(unittest.TestCase):
         self.window.end.click()
         self.wait_for(lambda: self.window.state == 'idle')
 
-    def test_long_reconnect_does_not_claim_session_recovered(self):
+    def test_slow_successful_reconnect_keeps_session(self):
         from observer.product_cli import SourceStalled
         window = None
 
         class SlowReconnectSource(DemoSource):
+            reconnected = False
+
             def read(self, at):
-                raise SourceStalled('摄像头帧停止')
+                if not self.reconnected:
+                    raise SourceStalled('摄像头帧停止')
+                return super().read(at)
 
             def reconnect(self):
-                window.worker.runtime_watch.max_gap = .05
-                time.sleep(.12)
+                window.worker.runtime_watch.max_gap = .2
+                time.sleep(.45)
+                self.reconnected = True
 
-        window = self.open(SlowReconnectSource)
+        self.open(SlowReconnectSource)
+        window = self.window
         self.window.start.click()
-        self.wait_for(lambda: self.window.worker.last_session_id is not None
-                      and self.window.worker.service.identifier is None)
-        self.assertNotIn('摄像头已恢复', self.window.message.text())
+        self.wait_for(lambda: '摄像头已恢复' in self.window.message.text())
         store = ProductStore(self.args.data_dir)
         try:
-            result = store.summary(store.history()[0]['id'])
-            self.assertEqual(result['state'], 'interrupted')
+            history = store.history()
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]['state'], 'monitoring')
+            self.assertEqual(history[0]['id'], window.worker.service.identifier)
         finally:
             store.close()
 

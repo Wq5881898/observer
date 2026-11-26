@@ -478,6 +478,37 @@ class ProductTests(unittest.TestCase):
                          ['away', 'phone_held'])
         self.assertEqual(sum(a['kind'] == 'alert' for a in result['actions']), 1)
 
+    def test_sparse_away_alerts_at_twenty_without_counting_blind_intervals(self):
+        identifier = self.start()
+        for at in (0, 1, 7, 8, 14, 15, 19):
+            actions = self.feed(at, 'away')
+            self.assertFalse(any(action.kind.value == 'alert' for action in actions))
+        # A new phone candidate must not delay an already confirmed away alert.
+        self.feed(20, 'away', 'phone_held')
+        result = self.store.summary(identifier)
+        alerts = [action for action in result['actions'] if action['kind'] == 'alert']
+        self.assertEqual([alert['offset'] for alert in alerts], [20])
+        self.assertEqual(result['focus_incidents'][0]['signals'], ['away'])
+        self.assertEqual(result['violation_seconds'], 4)
+        self.assertEqual(result['totals']['away']['valid'], 4)
+
+    def test_return_or_lost_evidence_restarts_sparse_away_window(self):
+        for user_returned, lost_frame in ((True, False), (False, True), (False, False)):
+            with self.subTest(user_returned=user_returned, lost_frame=lost_frame):
+                identifier = self.start()
+                self.feed(0, 'away')
+                self.feed(1, 'away')
+                if user_returned or lost_frame:
+                    self.feed(5, unknown=lost_frame)
+                start = 6 if user_returned or lost_frame else 22
+                for offset in (0, 1, 7, 14, 19):
+                    self.feed(start + offset, 'away')
+                self.assertEqual(self.store.summary(identifier)['actions'], [])
+                self.feed(start + 20, 'away')
+                result = self.service.end(start + 20, self.now)
+                self.assertEqual(result['focus_incidents'][0]['started'], start)
+                self.assertEqual(result['violation_seconds'], 2)
+
     def test_abandoned_session_keeps_ledger_and_stops_at_checkpoint(self):
         identifier = self.start()
         for at in range(12):
@@ -1465,6 +1496,30 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(status['sessions'], 0)
         self.assertEqual(status['images'], 0)
         self.assertEqual(status['image_bytes'], 0)
+
+    def test_storage_status_batches_normal_screenshots_and_validates_missing_paths(self):
+        from unittest.mock import patch
+        import numpy as np
+
+        identifier = self.start()
+        self.store.set_images(True)
+        frame = np.zeros((16, 16, 3), dtype=np.uint8)
+        for name in ('first', 'second', 'missing'):
+            self.assertTrue(self.store.capture(identifier, name, frame))
+        (self.root / 'evidence' / 'missing.jpg').unlink()
+        expected_bytes = sum(
+            (self.root / 'evidence' / name).stat().st_size
+            for name in ('first.jpg', 'second.jpg')
+        )
+
+        with patch.object(self.store, 'safe_image_path',
+                          wraps=self.store.safe_image_path) as validate:
+            status = self.store.data_status()
+
+        validate.assert_called_once_with('evidence/missing.jpg')
+        self.assertEqual(status['images'], 2)
+        self.assertEqual(status['image_bytes'], expected_bytes)
+        self.assertEqual(status['evidence_errors'], 1)
 
     def test_formal_focus_evidence_keeps_only_confirmed_start_and_end(self):
         import numpy as np

@@ -35,6 +35,7 @@ class RuleConfig:
     maximum_penalty_points: float = 25.0
     maximum_sample_gap_seconds: float = 2.0
     alert_group: str | None = None
+    maximum_pending_sample_gap_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if not self.rule_id or not self.signal_name:
@@ -51,6 +52,9 @@ class RuleConfig:
             raise ValueError("rule durations cannot be negative")
         if self.maximum_sample_gap_seconds == 0:
             raise ValueError("maximum_sample_gap_seconds must be positive")
+        if (self.maximum_pending_sample_gap_seconds is not None
+                and self.maximum_pending_sample_gap_seconds < self.maximum_sample_gap_seconds):
+            raise ValueError("the pending sample gap cannot be shorter than the scoring gap")
         if self.alert_group is not None and not self.alert_group.strip():
             raise ValueError("alert_group cannot be empty")
         if min(
@@ -80,7 +84,7 @@ class SustainedRule:
         self._last_timestamp: float | None = None
         self._last_signal: SignalState | None = None
         self._pending_started: float | None = None
-        self._pending_seconds = 0.0
+        self._pending_observed_seconds = 0.0
         self._event_id: str | None = None
         self._event_started: float | None = None
         self._violation_seconds = 0.0
@@ -106,17 +110,20 @@ class SustainedRule:
             if signal is SignalState.VIOLATION:
                 self.phase = RulePhase.PENDING
                 self._pending_started = now
-                self._pending_seconds = 0.0
+                self._pending_observed_seconds = 0.0
                 if self.config.trigger_after_seconds == 0:
                     actions.extend(self._activate(now))
         elif self.phase is RulePhase.PENDING:
             if signal is SignalState.VIOLATION:
-                if self._last_signal is SignalState.VIOLATION and continuous:
-                    self._pending_seconds += delta
+                pending_gap = (self.config.maximum_pending_sample_gap_seconds
+                               or self.config.maximum_sample_gap_seconds)
+                if self._last_signal is SignalState.VIOLATION and delta <= pending_gap:
+                    if continuous:
+                        self._pending_observed_seconds += delta
                 else:
                     self._pending_started = now
-                    self._pending_seconds = 0.0
-                if self._pending_seconds >= self.config.trigger_after_seconds:
+                    self._pending_observed_seconds = 0.0
+                if now - self._pending_started >= self.config.trigger_after_seconds:
                     actions.extend(self._activate(now))
             else:
                 self._reset()
@@ -161,7 +168,7 @@ class SustainedRule:
         self.phase = RulePhase.ACTIVE
         self._event_id = str(uuid.uuid4())
         self._event_started = self._pending_started if self._pending_started is not None else now
-        self._violation_seconds = self._pending_seconds
+        self._violation_seconds = self._pending_observed_seconds
         self._next_penalty_seconds = (
             self._violation_seconds + self.config.repeat_penalty_interval_seconds
         )
@@ -231,7 +238,7 @@ class SustainedRule:
     def _reset(self) -> None:
         self.phase = RulePhase.CLEAR
         self._pending_started = None
-        self._pending_seconds = 0.0
+        self._pending_observed_seconds = 0.0
         self._event_id = None
         self._event_started = None
         self._violation_seconds = 0.0
